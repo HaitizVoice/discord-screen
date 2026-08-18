@@ -33,9 +33,13 @@ let reconnectDelay = 1000;
 let lagTimer = null;
 // Transmissão nascida aqui dentro, quando o Discord permite capturar no iframe.
 let myBroadcast = null;
-// Silenciar vale para tudo que chega e sobrevive a trocar de tela: é uma
-// preferência de quem assiste, não estado de uma transmissão.
-let mudo = read('mudo') === '1';
+// Volume de tudo que chega, de 0 a 1. Vale para todas as telas e sobrevive a
+// trocar de sala: é preferência de quem assiste, não estado de uma transmissão.
+// Zero é o mudo — um número só, em vez de dois estados que precisam concordar.
+let volume = Math.min(1, Math.max(0, Number(read('volume') ?? 1)));
+// Para onde o botão de silenciar volta. Sem isto, desmutar cairia sempre em
+// 100%, ignorando o ajuste que a pessoa tinha feito.
+let volumeAntes = volume || 1;
 // Qual tela está no palco, e se ela ocupa tudo. Guardados fora do render
 // porque a grade é reconstruída a cada mudança de estado da sala, e a escolha
 // de quem assiste precisa sobreviver a isso.
@@ -260,7 +264,12 @@ function buildSidebar(casters) {
   barra.append(
     secaoTitulo(participants.length === 1 ? '1 pessoa' : `${participants.length} pessoas`)
   );
-  for (const p of participants) barra.append(buildPerson(p));
+
+  // Duas colunas: o mesmo quadro da grade, no tamanho que a lateral comporta.
+  const gente = document.createElement('div');
+  gente.className = 'sidebar-people';
+  for (const p of participants) gente.append(buildTile(p).el);
+  barra.append(gente);
 
   return barra;
 }
@@ -270,28 +279,6 @@ function secaoTitulo(texto) {
   t.className = 'sidebar-title';
   t.textContent = texto;
   return t;
-}
-
-/** Linha de participante. Compacta de propósito: a tela é a estrela. */
-function buildPerson(p) {
-  const linha = document.createElement('div');
-  linha.className = 'person';
-  linha.append(buildAvatar(p));
-
-  const nome = document.createElement('span');
-  nome.className = 'person-name';
-  // textContent, nunca innerHTML: nome vem do Discord, é conteúdo de terceiro.
-  nome.textContent = p.id === session?.user?.id ? `${p.name} (você)` : p.name;
-  linha.append(nome);
-
-  if (p.broadcasting) {
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    dot.title = 'Compartilhando a tela';
-    linha.append(dot);
-  }
-
-  return linha;
 }
 
 /**
@@ -629,21 +616,20 @@ function renderBar() {
   btn.classList.toggle('go', !iAmCasting);
   btn.classList.toggle('live', iAmCasting);
   btn.disabled = false;
-  $('shareLabel').textContent = iAmCasting ? 'Parar transmissão' : 'Compartilhar tela';
+
+  const rotuloShare = iAmCasting ? 'Parar transmissão' : 'Compartilhar tela';
+  $('shareLabel').textContent = rotuloShare;
+  btn.dataset.tip = rotuloShare;
+  btn.setAttribute('aria-label', rotuloShare);
 
   // A engrenagem só aparece para transmissão nascida aqui: a que roda na aba
   // externa é configurada por lá, e daqui não dá para mexer nela.
   $('liveSettings').hidden = !myBroadcast;
 
-  // O botão de som só existe quando há som para silenciar.
+  // O controle de som só existe quando há som para controlar.
   const temSom = [...streams.values()].some((s) => s.audio);
-  $('mute').hidden = !temSom;
-  $('mute').classList.toggle('on', mudo && temSom);
-  const rotuloSom = mudo ? 'Ligar o som' : 'Silenciar';
-  $('mute').dataset.tip = rotuloSom;
-  $('mute').setAttribute('aria-label', rotuloSom);
-  $('muteOn').hidden = mudo;
-  $('muteOff').hidden = !mudo;
+  $('volumeBox').hidden = !temSom;
+  renderVolume();
 
   renderProfileButton();
 
@@ -683,12 +669,11 @@ function startAudio(slot, config) {
   if (!s) return;
 
   s.audio?.stop();
-  s.audio = createAudio({ onError: (m) => toast(m, true) });
+  s.audio = createAudio({ onError: (m) => toast(m, true), volume });
   if (!s.audio.start(config)) {
     s.audio = null;
     return;
   }
-  s.audio.setMudo(mudo);
   renderBar();
 }
 
@@ -1416,12 +1401,31 @@ function openModal(mode) {
 
 $('liveSettings').addEventListener('click', () => openModal('live'));
 
-$('mute').addEventListener('click', () => {
-  mudo = !mudo;
-  store('mudo', mudo ? '1' : '0');
-  for (const s of streams.values()) s.audio?.setMudo(mudo);
-  renderBar();
-});
+/** Espelha o volume atual no botão e no cursor, sem tocar no áudio. */
+function renderVolume() {
+  const pct = Math.round(volume * 100);
+  $('volume').value = String(pct);
+  $('volumeVal').textContent = pct + '%';
+
+  const rotulo = volume === 0 ? 'Ligar o som' : 'Silenciar';
+  $('mute').setAttribute('aria-label', rotulo);
+  $('mute').title = rotulo;
+  $('mute').classList.toggle('on', volume === 0);
+  $('muteOn').hidden = volume === 0;
+  $('muteOff').hidden = volume !== 0;
+}
+
+function setVolume(valor) {
+  volume = Math.min(1, Math.max(0, valor));
+  if (volume > 0) volumeAntes = volume;
+  store('volume', String(volume));
+  for (const s of streams.values()) s.audio?.setVolume(volume);
+  renderVolume();
+}
+
+// Clique no alto-falante silencia e devolve; o cursor ajusta no meio termo.
+$('mute').addEventListener('click', () => setVolume(volume === 0 ? volumeAntes : 0));
+$('volume').addEventListener('input', (e) => setVolume(Number(e.target.value) / 100));
 
 $('modalSwap').addEventListener('click', async () => {
   if (!myBroadcast) return;
@@ -1464,6 +1468,7 @@ async function broadcastFromHere() {
     bitrate: Number($('mQuality').value),
     fps: Number($('mFps').value),
     audio: $('mAudio').checked,
+    onAviso: (m) => toast(m),
     onEnd: () => {
       myBroadcast = null;
       renderBar();

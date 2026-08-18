@@ -70,6 +70,7 @@ export function supportError({ requireChromium = false } = {}) {
  * @param {(info:object)=>void} [opts.onStatus]  codec/resolução/caminho de captura
  * @param {(stats:object)=>void} [opts.onStats]  viewers, fps, mbps, segundos no ar
  * @param {(reason:string)=>void} [opts.onEnd]   encerrou (por qualquer motivo)
+ * @param {(msg:string)=>void} [opts.onAviso]    algo mudou sem ser erro
  * @param {(msg:string)=>void} [opts.onError]
  */
 export function createBroadcaster({
@@ -81,6 +82,7 @@ export function createBroadcaster({
   onStats,
   onEnd,
   onError,
+  onAviso,
 }) {
   let ws = null;
   let stream = null;
@@ -112,14 +114,7 @@ export function createBroadcaster({
       // systemAudio: 'include' pede o som do computador em vez de só o da aba.
       // Os tratamentos de voz ficam desligados: eles existem para microfone e,
       // em som de aplicativo, cortam justamente o que se queria ouvir.
-      audio: audio
-        ? {
-            systemAudio: 'include',
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-          }
-        : false,
+      audio: audio ? audioConstraints() : false,
     });
 
     const track = stream.getVideoTracks()[0];
@@ -175,10 +170,61 @@ export function createBroadcaster({
     pump(track);
     // Pedir áudio não garante receber: em vários sistemas a caixa "compartilhar
     // o som" fica desmarcada, e o navegador devolve a tela sem faixa de som.
-    const audioTrack = stream.getAudioTracks()[0];
+    const audioTrack = somPermitido(track, stream);
     if (audioTrack) pumpAudio(audioTrack);
 
     return stream;
+  }
+
+  /**
+   * Restrições da captura de som.
+   *
+   * Os tratamentos de voz ficam desligados: existem para microfone e, em som de
+   * aplicativo, cortam justamente o que se queria ouvir.
+   *
+   * restrictOwnAudio tira da captura o que esta própria página está tocando —
+   * sem ele, quem transmite enquanto assiste a outra tela devolveria o som dela
+   * de volta para a sala, em laço. É experimental, então vai sob detecção.
+   */
+  function audioConstraints() {
+    const c = {
+      systemAudio: 'include',
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+    };
+    if (navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio) {
+      c.restrictOwnAudio = true;
+    }
+    return c;
+  }
+
+  /**
+   * Devolve a faixa de som, ou null quando transmiti-la faria a call se ouvir.
+   *
+   * Nenhum navegador consegue tirar um aplicativo específico da captura: o som
+   * é capturado por processo, na mistura do sistema, e é tudo ou nada. O que dá
+   * para saber é o que a pessoa escolheu compartilhar — e isso basta.
+   *
+   * Aba: o som sai só daquela aba, então a voz do Discord nunca entra. Tela
+   * inteira ou janela: vem a mistura do sistema, com o Discord dentro, e todo
+   * mundo na call passa a ouvir a própria voz de volta. Nesse caso a faixa é
+   * descartada aqui mesmo, antes de sair da máquina.
+   */
+  function somPermitido(videoTrack, capturado) {
+    const faixa = capturado.getAudioTracks()[0];
+    if (!faixa) return null;
+
+    const superficie = videoTrack.getSettings?.().displaySurface;
+    if (superficie === 'browser') return faixa;
+
+    faixa.stop();
+    capturado.removeTrack(faixa);
+    onAviso?.(
+      'Transmitindo sem som: na tela inteira o som do Discord entraria junto e ' +
+        'todo mundo se ouviria. Para transmitir com som, compartilhe uma aba do navegador.'
+    );
+    return null;
   }
 
   // -------------------------------------------------------------------- áudio
@@ -531,14 +577,7 @@ export function createBroadcaster({
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
     const fresh = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: { ideal: fps, max: fps } },
-      audio: audio
-        ? {
-            systemAudio: 'include',
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-          }
-        : false,
+      audio: audio ? audioConstraints() : false,
     });
 
     const previous = stream;
@@ -571,7 +610,7 @@ export function createBroadcaster({
     // A tela nova traz a própria faixa de som; a antiga morreu com o stream.
     await audioReader?.cancel().catch(() => {});
     audioReader = null;
-    const novoAudio = fresh.getAudioTracks()[0];
+    const novoAudio = somPermitido(track, fresh);
     if (novoAudio && audioEncoder) pumpAudio(novoAudio);
 
     return fresh;

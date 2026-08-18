@@ -24,12 +24,12 @@ const COLCHAO = 0.08;
 // a tela e continuar empilhando só piora — melhor um corte e voltar ao vivo.
 const ATRASO_MAXIMO = COLCHAO * 4;
 
-export function createAudio({ onError } = {}) {
+export function createAudio({ onError, volume = 1 } = {}) {
   let ctx = null;
   let decoder = null;
-  let volume = null;
+  let ganho = null;
   let proximo = 0;
-  let mudo = false;
+  let nivel = volume;
   let tocou = false;
 
   function start(config) {
@@ -43,9 +43,9 @@ export function createAudio({ onError } = {}) {
     // sampleRate igual ao da origem: deixar o navegador reamostrar acrescenta
     // latência e artefato sem ganho nenhum.
     ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: config.sampleRate });
-    volume = ctx.createGain();
-    volume.gain.value = mudo ? 0 : 1;
-    volume.connect(ctx.destination);
+    ganho = ctx.createGain();
+    ganho.gain.value = nivel;
+    ganho.connect(ctx.destination);
 
     decoder = new AudioDecoder({
       output: agendar,
@@ -110,7 +110,7 @@ export function createAudio({ onError } = {}) {
 
     const fonte = ctx.createBufferSource();
     fonte.buffer = buffer;
-    fonte.connect(volume);
+    fonte.connect(ganho);
     fonte.start(proximo);
     proximo += buffer.duration;
     tocou = true;
@@ -120,9 +120,14 @@ export function createAudio({ onError } = {}) {
     if (ctx.state === 'suspended') ctx.resume().catch(() => {});
   }
 
-  function setMudo(valor) {
-    mudo = valor;
-    if (volume) volume.gain.value = mudo ? 0 : 1;
+  /**
+   * @param {number} valor 0 a 1. Zero é o mudo — não existe estado separado.
+   */
+  function setVolume(valor) {
+    nivel = Math.min(1, Math.max(0, valor));
+    // Rampa curta em vez de salto: mudar o ganho de um instante para o outro
+    // produz um clique audível, que é justamente o que se quer evitar.
+    if (ganho) ganho.gain.setTargetAtTime(nivel, ganho.context.currentTime, 0.02);
   }
 
   function stop() {
@@ -135,10 +140,10 @@ export function createAudio({ onError } = {}) {
 
     ctx?.close().catch(() => {});
     ctx = null;
-    volume = null;
+    ganho = null;
     proximo = 0;
     tocou = false;
   }
 
-  return { start, push, stop, setMudo, temSom: () => tocou };
+  return { start, push, stop, setVolume, temSom: () => tocou };
 }

@@ -143,16 +143,31 @@
                 <path d="M12 16.5v-5M12 7.8h.01" />
               </svg>
             </button>
-            <button id="mute" class="btn" data-tip="Silenciar" aria-label="Silenciar" hidden>
-              <svg id="muteOn" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M11 5 6 9H2v6h4l5 4V5z" />
-                <path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14" />
-              </svg>
-              <svg id="muteOff" viewBox="0 0 24 24" aria-hidden="true" hidden>
-                <path d="M11 5 6 9H2v6h4l5 4V5z" />
-                <path d="M22 9l-6 6M16 9l6 6" />
-              </svg>
-            </button>
+            <div id="volumeBox" class="volume" hidden>
+              <button id="mute" class="btn" title="Silenciar" aria-label="Silenciar">
+                <svg id="muteOn" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M11 5 6 9H2v6h4l5 4V5z" />
+                  <path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14" />
+                </svg>
+                <svg id="muteOff" viewBox="0 0 24 24" aria-hidden="true" hidden>
+                  <path d="M11 5 6 9H2v6h4l5 4V5z" />
+                  <path d="M22 9l-6 6M16 9l6 6" />
+                </svg>
+              </button>
+
+              <div class="volume-pop">
+                <span id="volumeVal" class="volume-val">100%</span>
+                <input
+                  id="volume"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value="100"
+                  aria-label="Volume"
+                />
+              </div>
+            </div>
             <button id="fullscreen" class="btn" data-tip="Tela cheia" aria-label="Tela cheia" hidden>
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />

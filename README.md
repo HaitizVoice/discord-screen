@@ -165,17 +165,24 @@ Aí o `npm run tunel` deixa de ser necessário.
 ## Compartilhando com som
 
 Ao clicar em **Compartilhar tela**, marque *Compartilhar o som do computador*.
+Depois, na janela do navegador, **escolha uma aba** e marque a caixinha de
+áudio que aparece lá embaixo.
 
-Depois, na janela que o navegador abre para escolher a tela, marque também a
-caixinha de **áudio** que aparece lá embaixo. São duas marcações: a primeira diz
-que você quer som, a segunda é o navegador pedindo permissão. Sem a segunda, ele
-entrega a tela em silêncio.
+Quem assiste passa o mouse no alto-falante da barra de baixo para ajustar o
+volume, ou clica nele para silenciar de vez.
 
-Quem assiste tem um botão de alto-falante na barra de baixo para silenciar.
+### Por que só aba?
 
-> Som funciona no Chrome, Edge, Brave e Opera. No Windows dá para pegar o som do
-> computador inteiro; no Mac, só o som de uma aba do navegador — é limitação do
-> sistema, não do programa.
+Se você compartilhar a tela inteira, o computador entrega **todo** o som que
+está tocando — inclusive o do Discord. Aí todo mundo na call escuta a própria
+voz de volta, com atraso. É insuportável em segundos.
+
+Nenhum navegador consegue tirar um programa específico dessa captura: o som vem
+misturado, é tudo ou nada. Então o programa faz o que dá para fazer — se você
+escolher a tela inteira, ele **transmite sem som** e avisa o motivo. Compartilhe
+uma aba do navegador e o som vai junto, limpo.
+
+> Som funciona no Chrome, Edge, Brave e Opera.
 
 ---
 

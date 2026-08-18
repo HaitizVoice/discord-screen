@@ -153,41 +153,25 @@ body {
   padding: 8px;
 }
 
-/* Pessoa como linha, não como quadro: cabe muito mais gente no mesmo espaço, e
-   quem não está transmitindo não precisa de área de vídeo. */
-.person {
+/* Pessoas em quadros, como na call: o mesmo tile da grade, em duas colunas.
+   Duas porque uma só desperdiça a largura e três deixam o avatar pequeno
+   demais para reconhecer alguém de relance. */
+.sidebar-people {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 9px;
-  border-radius: 8px;
-  background: var(--tile);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
-.person .avatar {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
-  font-size: 12px;
+.sidebar-people .tile {
+  aspect-ratio: 16 / 9;
 }
 
-.person-name {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Avatar proporcional ao quadro: o clamp da grade grande deixaria um disco
+   quase do tamanho do tile aqui. */
+.sidebar-people .avatar {
+  width: 42%;
   font-size: 13px;
-}
-
-.person .dot {
-  margin-left: auto;
-  flex: 0 0 auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--live);
-  animation: pulse 1.6s ease-in-out infinite;
 }
 
 .divider {
@@ -1081,6 +1065,60 @@ button {
   margin-top: 18px;
 }
 
+/* ------------------------------------------------------------------ volume */
+
+/* O cursor aparece ao pousar sobre o alto-falante. Um clique ainda silencia —
+   quem só quer cortar o som não deveria ter que mirar num cursor. */
+.volume {
+  position: relative;
+  display: flex;
+}
+
+.volume-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #111214;
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  z-index: 40;
+}
+
+/* Ponte invisível sobre o vão até o botão: sem ela, mover o mouse do botão
+   para o cursor atravessa um pedaço sem hover e a caixa fecha na cara. */
+.volume-pop::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 12px;
+}
+
+.volume:hover .volume-pop,
+.volume:focus-within .volume-pop {
+  display: flex;
+}
+
+.volume-val {
+  font: 600 11.5px/1 inherit;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.volume-pop input {
+  width: 108px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 /* -------------------------------------------------------------------- dica */
 
 /* Botão que é só ícone precisa dizer o que faz. O `title` do navegador demora
@@ -1109,6 +1147,72 @@ button {
 [data-tip]:hover::after,
 [data-tip]:focus-visible::after {
   opacity: 1;
+}
+
+/* ------------------------------------------------------ painel apertado */
+
+/* A atividade do Discord abre num painel que pode ficar bem estreito ou baixo.
+   Nesse tamanho não cabe dividir: a lateral sai inteira e fica só a tela, que é
+   o que a pessoa foi ver. Os botões perdem o rótulo e ficam só com o ícone —
+   texto ali roubaria a largura da própria tela. */
+@media (max-width: 620px), (max-height: 460px) {
+  .grid,
+  .grid.palco {
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .grid.palco {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .grid.palco .divider,
+  .grid.palco .sidebar {
+    display: none;
+  }
+
+  .topbar {
+    padding: 8px 8px 0;
+  }
+
+  .bottombar {
+    padding: 0 8px 8px;
+    gap: 6px;
+  }
+
+  .dock {
+    gap: 6px;
+  }
+
+  .group {
+    padding: 4px;
+    gap: 4px;
+  }
+
+  .btn {
+    height: 38px;
+    min-width: 38px;
+    padding: 0 10px;
+  }
+
+  .btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .btn.wide {
+    padding: 0 10px;
+  }
+
+  /* O ícone e a cor já dizem o que o botão faz; a dica cobre o resto. */
+  #shareLabel {
+    display: none;
+  }
+
+  .tile-watchers,
+  .tile-you {
+    display: none;
+  }
 }
 
 /* ----------------------------------------------------------- acessibilidade */

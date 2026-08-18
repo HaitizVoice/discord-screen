@@ -96,6 +96,17 @@ body {
   gap: 0;
 }
 
+/* O palco tem a forma do vídeo (posta em linha pelo render) e fica centrado na
+   área disponível. As sobras viram fundo da grade, não um retângulo preto com
+   borda verde em volta de nada. */
+.tile-palco[style*='aspect-ratio'] {
+  place-self: center;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
 /* Tela cheia: só o palco. A barra de controles fica, senão não haveria saída
    visível — sair por tecla é atalho, não é caminho. */
 .grid.palco.cheia {

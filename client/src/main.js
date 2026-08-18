@@ -325,6 +325,13 @@ function buildTile(p, { palco = false, semVideo = false } = {}) {
   tile.className = p.broadcasting ? 'tile sharing' : 'tile';
   if (palco) tile.classList.add('tile-palco');
 
+  // Com a forma do vídeo no próprio tile, a moldura passa a abraçar a imagem.
+  // Sem isto, uma tela 16:9 dentro de um palco largo e baixo encolhia até caber
+  // na altura e sobrava um retângulo preto ocupando metade da área.
+  if (palco && stream?.canvas.width) {
+    tile.style.aspectRatio = `${stream.canvas.width} / ${stream.canvas.height}`;
+  }
+
   const aoClicar = () => {
     if (palco) telaCheia = !telaCheia;
     else activeSlot = slot;
@@ -689,7 +696,7 @@ function openStream(slot, userId) {
     started: false,
     player: createPlayer(canvas, {
       onError: (m) => toast(m, true),
-      onFirstFrame: () => {
+      onTamanho: () => {
         s.started = true;
         renderGrid();
       },

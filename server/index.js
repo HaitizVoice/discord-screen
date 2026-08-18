@@ -40,6 +40,27 @@ if (isProd && !process.env.SESSION_SECRET) {
 const app = express();
 app.use(express.json());
 
+// Quem hospeda costuma carimbar X-Frame-Options: SAMEORIGIN em toda resposta —
+// a Square Cloud faz isso na borda. É uma proteção sensata para um site comum
+// e fatal para uma Activity, que por definição roda dentro de um iframe em
+// discordsays.com: o navegador se recusa a desenhar a página e o Discord mostra
+// um retângulo branco, sem erro visível, enquanto o mesmo endereço aberto
+// direto no navegador funciona perfeitamente.
+//
+// O conserto cabe aqui porque o frame-ancestors do CSP tem precedência sobre o
+// X-Frame-Options: quando as duas respostas vêm juntas, o navegador ignora a
+// segunda. Ou seja, não é preciso a hospedagem parar de mandar a dela.
+//
+// A lista é a cadeia inteira de quem embute: o iframe da Activity mora em
+// <id>.discordsays.com, e ele por sua vez está dentro do discord.com.
+app.use((_req, res, next) => {
+  res.setHeader(
+    'Content-Security-Policy',
+    "frame-ancestors 'self' https://discord.com https://*.discord.com https://*.discordsays.com"
+  );
+  next();
+});
+
 // Página de captura (broadcaster). Servida como página normal, fora do proxy.
 // Nomes fixos (share.html/js/css), então nunca cachear: senão uma correção
 // fica presa no navegador de quem transmite, sem jeito óbvio de perceber.

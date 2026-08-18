@@ -29,12 +29,26 @@ export function lerEnv() {
   }
 }
 
+// As chaves que este arquivo sabe explicar. Qualquer outra que exista no .env
+// é de quem o escreveu, e volta ao fim do arquivo intacta.
+const CONHECIDAS = [
+  'SESSION_SECRET',
+  'PORT',
+  'PUBLIC_ORIGIN',
+  'DISCORD_CLIENT_ID',
+  'DISCORD_CLIENT_SECRET',
+  'DISCORD_BOT_TOKEN',
+  'NODE_ENV',
+];
+
 /**
- * Grava as chaves recebidas, preservando o resto do arquivo.
+ * Grava as chaves recebidas, preservando de fato o resto do arquivo.
  *
  * O arquivo é recriado com comentários fixos em vez de remendado linha a linha:
  * é uma dúzia de chaves, e um .env legível vale mais do que preservar a ordem
- * em que alguém digitou.
+ * em que alguém digitou. Mas recriar não pode significar perder — o que este
+ * arquivo não conhece é copiado de volta, senão uma variável de deploy some
+ * sem aviso na primeira vez que alguém roda o assistente.
  */
 export function gravarEnv(novos) {
   const v = { ...lerEnv(), ...novos };
@@ -67,6 +81,15 @@ export function gravarEnv(novos) {
     `NODE_ENV=${v.NODE_ENV ?? 'development'}`,
     '',
   ];
+
+  // O que este arquivo nao conhece volta intacto: uma variavel de deploy nao
+  // pode sumir em silencio porque alguem rodou o assistente.
+  const extras = Object.keys(v).filter((k) => !CONHECIDAS.includes(k));
+  if (extras.length) {
+    linhas.push("# Escritas por voce, mantidas como estavam.");
+    for (const k of extras) linhas.push(k + "=" + v[k]);
+    linhas.push("");
+  }
 
   fs.writeFileSync(ARQUIVO, linhas.join('\n'));
 }

@@ -75,6 +75,17 @@ O áudio vai pelo mesmo socket e pelo mesmo cabeçalho do vídeo, distinguido s�
 pelo byte de tipo. Opus a 96 kbps, capturado junto com a tela por
 `getDisplayMedia({ audio: { systemAudio: 'include' } })`.
 
+**O som só sai de aba.** Compartilhar a tela inteira entrega a mistura do
+sistema, com a saída do Discord dentro — e a call inteira passa a se ouvir de
+volta. Não existe API para tirar um processo dessa mistura: o áudio é capturado
+por processo e a relação com uma janela não é um-para-um. O que dá para saber é
+o `displaySurface` escolhido, e isso basta — `browser` significa som daquela
+aba só. Nos outros casos a faixa é parada antes de sair da máquina.
+
+Junto vai `restrictOwnAudio` quando o navegador suporta: ele tira da captura o
+que a própria página está tocando, senão quem transmite enquanto assiste devolve
+o som da outra tela para a sala, em laço.
+
 Três coisas que o desenho assume:
 
 - **Áudio não tem keyframe.** Cada pacote Opus se decodifica sozinho, então ele

@@ -165,22 +165,6 @@ video {
   font-variant-numeric: tabular-nums;
 }
 
-.check {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin: 14px 0 0;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.check input {
-  width: 17px;
-  height: 17px;
-  flex: 0 0 auto;
-  accent-color: #5865f2;
-}
-
 .note {
   margin: 18px 0 24px;
   padding: 10px 12px;
@@ -220,6 +204,11 @@ video {
   min-height: 20px;
   font-size: 14px;
   color: var(--muted);
+}
+
+/* Aviso nao e erro: o som foi descartado, mas a tela continua no ar. */
+.status.aviso {
+  color: #f0b232;
 }
 
 .status.error {

@@ -8,7 +8,7 @@
  * Toda a lógica de captura e codificação vive em /shared/broadcaster.js, a mesma
  * usada dentro da Activity — aqui é só a interface.
  */
-import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=2';
+import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=3';
 
 const $ = (id) => document.getElementById(id);
 
@@ -112,6 +112,7 @@ async function start() {
       $('elapsed').textContent =
         `${String(Math.floor(s.seconds / 60)).padStart(2, '0')}:${String(s.seconds % 60).padStart(2, '0')}`;
     },
+    onAviso: (msg) => setStatus(msg, 'aviso'),
     onEnd: (reason) => {
       broadcaster = null;
       $('preview').srcObject = null;

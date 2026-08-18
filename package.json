@@ -11,7 +11,7 @@
     "postinstall": "node -e \"console.log('\\n  Pronto. Agora rode:  npm run configurar\\n')\"",
     "configurar": "node scripts/configurar.mjs",
     "tunel": "node scripts/tunel.mjs",
-    "dev": "concurrently -n servidor,site -c blue,magenta \"npm -w server run dev\" \"npm -w client run dev\"",
+    "dev": "concurrently -k -n site,servidor,tunel -c magenta,blue,yellow \"npm -w client run build -- --watch\" \"node --watch server/index.js\" \"node scripts/tunel.mjs\"",
     "start": "npm run build && npm -w server run start",
     "build": "npm -w client run build",
     "smoke": "node scripts/smoke.mjs"

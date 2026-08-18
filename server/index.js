@@ -685,6 +685,58 @@ wss.on('connection', (ws) => {
 
 wss.on('close', () => clearInterval(heartbeat));
 
+// Porta ocupada e o tropeco mais comum aqui: basta um "npm start" esquecido
+// numa janela. Sem isto, o Node cospe um stack trace de vinte linhas que nao
+// diz nem qual e o problema nem o que fazer.
+server.on('error', (err) => {
+  if (err.code !== 'EADDRINUSE') throw err;
+
+  console.error('');
+  console.error(`  A porta ${PORT} já está sendo usada.`);
+  console.error('  Quase sempre é outra janela deste mesmo programa aberta.');
+  console.error('  Feche a outra janela e tente de novo.');
+  console.error('');
+  console.error('  Se precisar rodar os dois, mude PORT no arquivo .env.');
+  console.error('');
+  process.exit(1);
+});
+
+/** Data da modificação mais recente dentro de um caminho. */
+function maisRecente(alvo) {
+  const s = fs.statSync(alvo);
+  if (!s.isDirectory()) return s.mtimeMs;
+  return fs
+    .readdirSync(alvo)
+    .reduce((maior, nome) => Math.max(maior, maisRecente(path.join(alvo, nome))), 0);
+}
+
+/**
+ * Avisa quando o que está no ar foi montado antes da última mudança no código.
+ *
+ * Quem roda "npm run dev" vê as mudanças no localhost:5173, mas o Discord entra
+ * por esta porta — que serve o último build. A mudança parece não ter
+ * acontecido, e não há nada na tela que explique por quê.
+ */
+function avisarBuildVelho() {
+  const raiz = path.join(__dirname, '..');
+  try {
+    const build = fs.statSync(path.join(clientDist, 'index.html')).mtimeMs;
+    const fonte = Math.max(
+      maisRecente(path.join(raiz, 'client', 'src')),
+      maisRecente(path.join(raiz, 'client', 'index.html')),
+      maisRecente(path.join(raiz, 'shared'))
+    );
+    if (fonte <= build) return;
+
+    console.log('');
+    console.log('  Aviso: o site no ar foi montado antes da sua última mudança no código.');
+    console.log('  Pelo Discord as pessoas ainda veem a versão antiga.');
+    console.log('  Rode "npm start" para montar de novo — "npm run dev" atualiza só o 5173.');
+  } catch {
+    // Ainda sem build; o proprio arranque ja diz o que fazer.
+  }
+}
+
 server.listen(PORT, () => {
   const local = `http://localhost:${PORT}`;
 
@@ -711,6 +763,8 @@ server.listen(PORT, () => {
     console.error('  A tela de captura precisa abrir fora do Discord, senão a');
     console.error('  captura é bloqueada. Rode: npm run tunel');
   }
+
+  avisarBuildVelho();
 
   if (DISCORD_CLIENT_ID && PUBLIC_ORIGIN.startsWith('http://localhost')) {
     console.log('');

@@ -39,6 +39,7 @@ const CONHECIDAS = [
   'DISCORD_CLIENT_SECRET',
   'DISCORD_BOT_TOKEN',
   'NODE_ENV',
+  'TUNEL_CONFIG',
 ];
 
 /**
@@ -79,6 +80,10 @@ export function gravarEnv(novos) {
     '',
     '# Deixe "production" quando publicar de verdade.',
     `NODE_ENV=${v.NODE_ENV ?? 'development'}`,
+    '',
+    '# Túnel com endereço fixo. Vazio = o túnel criado é descartável, com',
+    '# endereço novo a cada vez (e aí o Target no Discord muda junto).',
+    `TUNEL_CONFIG=${v.TUNEL_CONFIG ?? ''}`,
     '',
   ];
 

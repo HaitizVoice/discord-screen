@@ -1373,16 +1373,6 @@ function connect() {
       watching.delete(msg.slot);
       closeStream(msg.slot);
       renderGrid();
-
-      // `initial` marca o inventário de quem acabou de entrar. Sem essa
-      // distinção, entrar numa sala com telas no ar dispararia um aviso por
-      // tela, todos anunciando algo que já estava acontecendo.
-      if (!msg.initial && msg.userId !== session?.user?.id) {
-        const quem = participants.find((p) => p.id === msg.userId)?.name;
-        toast(
-          quem ? `${quem} começou a compartilhar a tela.` : 'Alguém começou a compartilhar a tela.'
-        );
-      }
     } else if (msg.type === 'config') {
       const info = available.get(msg.slot);
       if (info) info.config = msg.config;
@@ -1395,12 +1385,6 @@ function connect() {
       // o servidor reenvia assim que o pedido chegar.
       if (watching.has(msg.slot)) startAudio(msg.slot, msg.config);
     } else if (msg.type === 'stream-stop') {
-      // Só avisa quem estava assistindo: para os demais nada sumiu da tela.
-      if (watching.has(msg.slot)) {
-        const dono = available.get(msg.slot)?.userId;
-        const quem = participants.find((p) => p.id === dono)?.name;
-        toast(quem ? `${quem} parou de compartilhar.` : 'A transmissão foi encerrada.');
-      }
       available.delete(msg.slot);
       watching.delete(msg.slot);
       endStream(msg.slot);

@@ -511,10 +511,7 @@ export function attachViewer(room, ws, info) {
   // Anuncia o que está no ar, sem começar a mandar quadros: assistir é opt-in.
   for (const entry of room.broadcasters.values()) {
     if (!entry.streaming) continue;
-    // `initial` distingue este inventário de chegada de uma transmissão que
-    // começou agora: sem ele o cliente anunciaria "fulano começou a
-    // compartilhar" uma vez por tela já no ar, toda vez que alguém entra.
-    sendJson(ws, { type: 'stream-start', slot: entry.slot, userId: entry.info.id, initial: true });
+    sendJson(ws, { type: 'stream-start', slot: entry.slot, userId: entry.info.id });
   }
 
   broadcastState(room);

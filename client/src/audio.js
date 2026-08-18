@@ -121,10 +121,11 @@ export function createAudio({ onError, volume = 1 } = {}) {
   }
 
   /**
-   * @param {number} valor 0 a 1. Zero é o mudo — não existe estado separado.
+   * @param {number} valor 0 a 2. Zero é o mudo — não existe estado separado, e
+   * acima de 1 amplifica, para socorrer quem capturou o som muito baixo.
    */
   function setVolume(valor) {
-    nivel = Math.min(1, Math.max(0, valor));
+    nivel = Math.min(2, Math.max(0, valor));
     // Rampa curta em vez de salto: mudar o ganho de um instante para o outro
     // produz um clique audível, que é justamente o que se quer evitar.
     if (ganho) ganho.gain.setTargetAtTime(nivel, ganho.context.currentTime, 0.02);

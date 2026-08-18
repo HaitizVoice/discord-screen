@@ -38,6 +38,34 @@ let myBroadcast = null;
 // trocar de sala: é preferência de quem assiste, não estado de uma transmissão.
 // Zero é o mudo — um número só, em vez de dois estados que precisam concordar.
 let volume = Math.min(1, Math.max(0, Number(read('volume') ?? 1)));
+
+/**
+ * Volume de cada pessoa, separado do volume geral.
+ *
+ * Como no Discord: o cursor do dock é o volume de tudo, e cada transmissão tem
+ * o seu, guardado por pessoa e não por sessão — quem sempre chega alto demais
+ * continua ajustado amanhã. O que sai no alto-falante é o produto dos dois.
+ */
+const volumePessoa = lerVolumes();
+
+function lerVolumes() {
+  try {
+    return new Map(Object.entries(JSON.parse(read('volumePessoa') ?? '{}')));
+  } catch {
+    return new Map();
+  }
+}
+
+const gravarVolumes = () =>
+  store('volumePessoa', JSON.stringify(Object.fromEntries(volumePessoa)));
+
+const volumeEfetivo = (userId) => volume * (volumePessoa.get(userId) ?? 1);
+
+/** Reaplica o volume de um stream depois de qualquer um dos dois mudar. */
+function aplicarVolume(slot) {
+  const s = streams.get(slot);
+  s?.audio?.setVolume(volumeEfetivo(s.userId));
+}
 // Para onde o botão de silenciar volta. Sem isto, desmutar cairia sempre em
 // 100%, ignorando o ajuste que a pessoa tinha feito.
 let volumeAntes = volume || 1;
@@ -549,6 +577,11 @@ function openTileMenu(x, y, slot, name) {
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
 
+  // O cursor só aparece onde há som para ajustar: oferecer um controle que não
+  // faz nada é pior do que não oferecer nenhum.
+  const stream = streams.get(slot);
+  if (stream?.audio) menu.append(buildMenuVolume(stream.userId, name, slot));
+
   const item = document.createElement('button');
   item.textContent = `Parar de assistir ${name}`;
   item.addEventListener('click', () => {
@@ -579,6 +612,52 @@ function openTileMenu(x, y, slot, name) {
     window.addEventListener('pointerdown', close);
     window.addEventListener('keydown', close);
   }, 0);
+}
+
+/** Cursor de volume de uma pessoa, no menu do botão direito. */
+function buildMenuVolume(userId, name, slot) {
+  const bloco = document.createElement('div');
+  bloco.className = 'menu-volume';
+
+  const rotulo = document.createElement('span');
+  rotulo.className = 'menu-volume-nome';
+  // textContent, nunca innerHTML: nome vem do Discord, é conteúdo de terceiro.
+  rotulo.textContent = `Volume de ${name}`;
+
+  const linha = document.createElement('div');
+  linha.className = 'menu-volume-linha';
+
+  const barra = document.createElement('input');
+  barra.type = 'range';
+  barra.min = '0';
+  barra.max = '200';
+  barra.step = '5';
+  barra.setAttribute('aria-label', `Volume de ${name}`);
+
+  const valor = document.createElement('span');
+  valor.className = 'menu-volume-valor';
+
+  const mostrar = () => {
+    valor.textContent = `${barra.value}%`;
+  };
+
+  barra.value = String(Math.round((volumePessoa.get(userId) ?? 1) * 100));
+  mostrar();
+
+  barra.addEventListener('input', () => {
+    const nivel = Number(barra.value) / 100;
+    // 100% é o padrão: não guardar significa "nunca foi mexido", e é o que
+    // mantém o armazenamento pequeno depois de muita gente passar pela sala.
+    if (nivel === 1) volumePessoa.delete(userId);
+    else volumePessoa.set(userId, nivel);
+    gravarVolumes();
+    aplicarVolume(slot);
+    mostrar();
+  });
+
+  linha.append(barra, valor);
+  bloco.append(rotulo, linha);
+  return bloco;
 }
 
 function buildAvatar(p) {
@@ -714,7 +793,7 @@ function startAudio(slot, config) {
   if (!s) return;
 
   s.audio?.stop();
-  s.audio = createAudio({ onError: (m) => toast(m, true), volume });
+  s.audio = createAudio({ onError: (m) => toast(m, true), volume: volumeEfetivo(s.userId) });
   if (!s.audio.start(config)) {
     s.audio = null;
     return;
@@ -1200,18 +1279,38 @@ async function loadConfig() {
  * servidor diz ser o atual.
  */
 function checkVersion(asset) {
+  const mine = import.meta.url.split('/').pop().split('?')[0];
+
   // Em desenvolvimento o Vite serve `main.js` sem hash nenhum, enquanto o
   // servidor relata o nome do último build. Comparar os dois acusa uma
   // desatualização que não existe e joga a página num recarregamento eterno.
-  if (import.meta.env.DEV) return;
+  //
+  // A pergunta "isto é um build?" é respondida pelo próprio nome do arquivo, e
+  // não por `import.meta.env.DEV`. O DEV depende de NODE_ENV, que este projeto
+  // define como "development" no .env — e o Vite lê esse arquivo. Resultado: no
+  // build de produção o DEV vinha true, e a função inteira era removida por
+  // codigo morto. Ela existia sem nunca rodar.
+  if (!/^index-[A-Za-z0-9_-]+.js$/.test(mine)) return;
 
-  const mine = import.meta.url.split('/').pop().split('?')[0];
   if (!asset || asset === mine) return;
+
+  // Dentro do Discord a página não se recarrega: o iframe pede a página de novo
+  // à hospedagem, e basta ela devolver X-Frame-Options para o navegador se
+  // recusar a desenhar — vira o retângulo branco. Fechar e reabrir a atividade
+  // faz o Discord montar o iframe do jeito certo, e é o que se pede aqui.
+  //
+  // O aviso continua: detectar a versão velha é o motivo desta função existir,
+  // e é dentro do Discord que ela mais serve, porque o cliente serve bundle
+  // antigo sem nenhum sinal visível.
+  if (inDiscord) {
+    toast('Esta atividade está numa versão antiga. Feche e abra de novo para atualizar.', true);
+    return;
+  }
 
   // Se recarregar não resolveu, o HTML servido também está velho: avisa em
   // vez de entrar em laço de reload.
   if (sessionStorage.getItem('reloadedFor') === asset) {
-    toast('Versão desatualizada e o cache não cede. Feche e abra a atividade novamente.', true);
+    toast('Versão desatualizada e o cache não cede. Recarregue a página.', true);
     return;
   }
   sessionStorage.setItem('reloadedFor', asset);
@@ -1550,7 +1649,8 @@ function setVolume(valor) {
   volume = Math.min(1, Math.max(0, valor));
   if (volume > 0) volumeAntes = volume;
   store('volume', String(volume));
-  for (const s of streams.values()) s.audio?.setVolume(volume);
+  // O geral mudou: cada stream recalcula, porque o dele é o produto dos dois.
+  for (const slot of streams.keys()) aplicarVolume(slot);
   renderVolume();
 }
 

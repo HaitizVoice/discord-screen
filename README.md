@@ -25,9 +25,7 @@ Para *assistir*, qualquer navegador serve.
 
 ---
 
-## Testar agora (2 minutos)
-
-Serve para ver funcionando antes de mexer com o Discord.
+## Ligar tudo (um comando)
 
 **1.** Baixe este projeto e descompacte numa pasta.
 
@@ -39,85 +37,104 @@ os comandos.
 
 ```
 npm install
-npm run configurar
+npm run start:fast
 ```
 
-Quando ele perguntar como você quer usar, escolha **1**.
+E pronto. Esse segundo comando faz tudo sozinho: se faltar alguma configuração
+ele pergunta na hora, depois monta o site, abre o endereço público e liga o
+servidor. **Uma janela só.**
 
-**4.** Agora ligue o programa:
+Na primeira vez ele baixa o `cloudflared` (uns 50 MB) e guarda em `.cache/`
+dentro da pasta do projeto. Você não instala nada à mão.
 
-```
-npm start
-```
+Para desligar, aperte `Ctrl + C` na janela preta. Isso derruba tudo junto.
 
-**5.** Abra <http://localhost:3001> no navegador.
+### Só quero testar no navegador
 
-Abra o mesmo endereço numa **segunda janela**. Crie uma sala numa, entre nela
-pela outra, e clique em **Compartilhar tela**. Você vai ver sua própria tela
-chegando do outro lado.
-
-Para desligar, volte na janela preta e aperte `Ctrl + C`.
+Se ele perguntar como você quer usar, escolha a opção **sem Discord**. Aí é só
+abrir <http://localhost:3001> em duas janelas, criar uma sala numa, entrar pela
+outra e clicar em **Compartilhar tela** — você vê sua própria tela chegando do
+outro lado.
 
 ---
 
 ## Usar dentro do Discord
 
-Aqui dá mais trabalho porque o Discord exige que você registre o programa no
-site dele. É uma vez só. Reserve uns 10 minutos.
+O Discord exige que você registre o programa no site dele. É uma vez só.
 
-Dentro do Discord não existe lista de salas: quem abre a atividade cai direto
-na sala daquela call, junto com o resto do pessoal que está lá.
+Quando o `npm run start:fast` pedir, ele vai te dizer exatamente onde achar cada
+valor no site do Discord, e no fim mostra **as coisas para colar lá**, já
+preenchidas com os seus dados. Faça o que ele mandar.
 
-### Passo 1 — Ligue o endereço público
-
-O Discord precisa de um endereço na internet para alcançar o programa que roda
-no seu computador. Isso se resolve sozinho:
-
-```
-npm run tunel
-```
-
-**Deixe essa janela aberta.** Ela vai mostrar um endereço parecido com
-`https://algo-aleatorio.trycloudflare.com`. Não precisa copiar — o programa já
-guarda sozinho.
-
-Na primeira vez ele baixa o `cloudflared` (uns 50 MB) e guarda em `.cache/`
-dentro da pasta do projeto. Você não precisa instalar nada, e se já tiver o
-cloudflared na máquina ele usa o seu.
-
-### Passo 2 — Configure
-
-Abra uma **segunda** janela preta na mesma pasta e rode:
-
-```
-npm run configurar
-```
-
-Escolha a opção **2** e siga o que aparecer na tela. Ele vai pedir dois valores
-do site do Discord e dizer exatamente onde encontrar cada um.
-
-No fim, ele mostra **três coisas para colar no site do Discord**, já preenchidas
-com os seus dados. Faça as três.
-
-### Passo 3 — Ligue
-
-```
-npm start
-```
-
-### Passo 4 — Abra no Discord
-
-Entre num canal de voz do seu servidor, clique no **foguete** 🚀 na barra de
+Depois, no Discord: entre num canal de voz, clique no **foguete** 🚀 na barra de
 baixo e escolha a atividade.
+
+Dentro do Discord não existe lista de salas: quem abre a atividade cai direto na
+sala daquela call, junto com o resto do pessoal que está lá.
+
+### O endereço que muda toda vez
+
+Por padrão o endereço público é descartável: **ele muda toda vez que você
+desliga e liga o programa**. E aí a atividade para de abrir, até você ir no site
+do Discord trocar o *Target* pelo endereço novo.
+
+Para acabar com isso de vez, rode **uma única vez**:
+
+```
+npm run tunel:criar
+```
+
+Ele abre o login da Cloudflare no navegador, cria um endereço fixo, aponta o DNS
+e já deixa tudo escrito na configuração. Depois disso o endereço nunca mais
+muda, e você não mexe no site do Discord de novo.
+
+> Precisa de um domínio seu já na Cloudflare. Se não tiver, siga com o
+> descartável mesmo — só lembre de atualizar o *Target* quando reiniciar.
+
+---
+
+## Compartilhando com som
+
+Ao clicar em **Compartilhar tela**, marque *Compartilhar o som*.
+
+Na janela que o navegador abre, **escolha uma aba** e marque a caixinha de áudio
+que aparece lá embaixo.
+
+### Por que só aba?
+
+Se você escolher a tela inteira, o computador entrega **todo** o som que está
+tocando — inclusive o do Discord. Aí todo mundo na call escuta a própria voz de
+volta, com atraso. É insuportável em segundos.
+
+Nenhum navegador consegue tirar um programa específico dessa captura: o som vem
+misturado, é tudo ou nada. Por isso, se você escolher a tela inteira, o programa
+transmite **sem som** — e o botão de engrenagem fica amarelo piscando.
+
+### Quero mostrar a tela inteira E ter som
+
+Dá. Clique na engrenagem amarela e escolha **"Som de uma aba"**. O vídeo continua
+sendo a tela inteira, e o som passa a vir da aba que você escolher — que é a
+única fonte que não carrega o Discord junto.
+
+Serve para YouTube, Twitch, jogo de navegador. Para um jogo instalado, cujo som
+não está em aba nenhuma, não tem como — nem aqui nem em qualquer outro site.
+
+Quem assiste passa o mouse no alto-falante da barra de baixo para ajustar o
+volume, ou clica nele para silenciar.
+
+> Som funciona no Chrome, Edge, Brave e Opera.
 
 ---
 
 ## Deu errado?
 
-**"Não foi possível entrar" ou a tela fica preta no Discord**
-O endereço do túnel muda toda vez que você fecha e abre o `npm run tunel`.
-Quando isso acontece, vá no site do Discord em **Activities → URL Mappings** e
-troque o *Target* pelo endereço novo (a janela do túnel mostra qual é).
+**A atividade não abre, ou fica só um retângulo branco**
+O endereço público mudou. Vá no site do Discord em **Activities → URL Mappings**
+e troque o *Target* pelo endereço que aparece na janela preta. Para isso não
+acontecer nunca mais, rode `npm run tunel:criar`.
+
+**"A porta 3001 já está sendo usada"**
+Tem outra janela do programa aberta. Feche a outra e tente de novo.
 
 **O botão de compartilhar abre uma aba e não acontece nada**
 Essa aba precisa continuar aberta enquanto você transmite. Pode voltar para o
@@ -127,9 +144,14 @@ Discord normalmente, só não feche a aba.
 O Node.js não foi instalado, ou a janela preta foi aberta antes da instalação.
 Feche a janela, abra de novo e tente outra vez.
 
+**Não sai som**
+Abra o botão ⓘ na barra de baixo e olhe a linha **Som**. Ela diz em qual dos
+casos você está: sem áudio na transmissão, esperando o áudio, silenciado aí, ou
+tocando.
+
 **Quero mudar alguma configuração**
-Rode `npm run configurar` de novo. Ele lembra do que você já respondeu — é só
-apertar Enter no que não mudou.
+Rode `npm run configurar`. Ele lembra do que você já respondeu — é só apertar
+Enter no que não mudou.
 
 **A "Sala da call" não confere quem está no canal de voz**
 Isso é opcional e só importa se você quer garantir que apenas quem está na call
@@ -150,7 +172,7 @@ Você precisa de uma hospedagem que rode Node.js. Lá dentro:
 4. Rode `npm start`.
 
 No site do Discord, troque o *Target* e o *Redirect* pelo endereço do seu site.
-Aí o `npm run tunel` deixa de ser necessário.
+Aí nenhum túnel é necessário.
 
 ---
 
@@ -159,40 +181,26 @@ Aí o `npm run tunel` deixa de ser necessário.
 | Comando | Para quê |
 |---|---|
 | `npm install` | Baixa o que o programa precisa. Só na primeira vez. |
-| `npm run configurar` | Faz as perguntas e monta a configuração. |
-| `npm run tunel` | Cria o endereço público para o Discord alcançar você. |
-| `npm start` | Liga o programa. |
+| `npm run start:fast` | **Liga tudo.** Configura se faltar, e sobe numa janela só. |
+| `npm run tunel:criar` | Uma vez só: cria um endereço fixo, que não muda mais. |
+| `npm run configurar` | Refaz as perguntas da configuração. |
 | `npm run smoke` | Confere se está tudo funcionando por dentro. |
 
----
+Para quem mexe no código:
 
-## Compartilhando com som
-
-Ao clicar em **Compartilhar tela**, marque *Compartilhar o som do computador*.
-Depois, na janela do navegador, **escolha uma aba** e marque a caixinha de
-áudio que aparece lá embaixo.
-
-Quem assiste passa o mouse no alto-falante da barra de baixo para ajustar o
-volume, ou clica nele para silenciar de vez.
-
-### Por que só aba?
-
-Se você compartilhar a tela inteira, o computador entrega **todo** o som que
-está tocando — inclusive o do Discord. Aí todo mundo na call escuta a própria
-voz de volta, com atraso. É insuportável em segundos.
-
-Nenhum navegador consegue tirar um programa específico dessa captura: o som vem
-misturado, é tudo ou nada. Então o programa faz o que dá para fazer — se você
-escolher a tela inteira, ele **transmite sem som** e avisa o motivo. Compartilhe
-uma aba do navegador e o som vai junto, limpo.
-
-> Som funciona no Chrome, Edge, Brave e Opera.
+| Comando | Para quê |
+|---|---|
+| `npm run dev` | Site, servidor e túnel juntos, remontando a cada arquivo salvo. |
+| `npm run dev:rapido` | O mesmo, mas com endereço descartável e sem tocar no `.env`. |
+| `npm start` | Monta o site e sobe só o servidor, sem túnel. |
+| `npm run tunel` | Só o túnel, numa janela separada. |
 
 ---
 
 ## O que ainda não dá
 
 - **Compartilhar do celular.** Nenhum navegador de celular permite.
+- **Som de programa instalado** em tela cheia. Só som de aba (veja acima).
 - **Muita gente ao mesmo tempo.** Cada pessoa assistindo consome uns 2 Mb/s da
   sua internet. Cinco pessoas já são 10 Mb/s.
 - **Mais de 4 telas ao mesmo tempo** na mesma sala.

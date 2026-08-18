@@ -40,34 +40,23 @@ if (isProd && !process.env.SESSION_SECRET) {
 const app = express();
 app.use(express.json());
 
-// Quem hospeda costuma carimbar X-Frame-Options: SAMEORIGIN em toda resposta —
-// a Square Cloud faz isso na borda. É uma proteção sensata para um site comum
-// e fatal para uma Activity, que por definição roda dentro de um iframe em
-// discordsays.com: o navegador se recusa a desenhar a página e o Discord mostra
-// um retângulo branco, sem erro visível, enquanto o mesmo endereço aberto
-// direto no navegador funciona perfeitamente.
+// Uma Activity roda dentro de um iframe em <id>.discordsays.com, que por sua
+// vez está dentro do discord.com. Declarar essa cadeia é o que autoriza o
+// navegador a desenhar a página ali.
 //
-// O conserto cabe aqui porque o frame-ancestors do CSP tem precedência sobre o
-// X-Frame-Options: quando as duas respostas vêm juntas, o navegador ignora a
-// segunda. Ou seja, não é preciso a hospedagem parar de mandar a dela.
-//
-// A lista é a cadeia inteira de quem embute: o iframe da Activity mora em
-// <id>.discordsays.com, e ele por sua vez está dentro do discord.com.
-// O frame-ancestors sozinho não bastou: quem serve o iframe é o proxy do
-// Discord, e ele repassa o X-Frame-Options da origem sem repassar o nosso CSP.
-// O console mostra "Refused to display ... because it set 'X-Frame-Options' to
-// 'sameorigin'". Ou seja, é o header em si que precisa não chegar lá.
-//
-// ALLOWALL não existe no padrão — e é justamente por isso que serve: diante de
-// um valor que não reconhece, o navegador ignora o header inteiro. Só funciona
-// se a hospedagem estiver adicionando o dela apenas quando a origem não mandou
-// nenhum; se ela sobrescrever, não há conserto possível daqui.
+// Vale dizer o que aprendemos tentando hospedar isto num PaaS: se a borda da
+// hospedagem carimbar "X-Frame-Options: SAMEORIGIN" nas respostas, não há nada
+// a fazer daqui. O proxy do Discord repassa o X-Frame-Options da origem e
+// substitui o CSP pelo dele — então o frame-ancestors abaixo nem chega ao
+// navegador, e o que sobra é o carimbo da hospedagem barrando o iframe. O
+// sintoma é cruel: retângulo branco no Discord, log limpo, e o mesmo endereço
+// funcionando quando aberto direto. Se isso reaparecer, o problema é a borda
+// de quem hospeda, não este arquivo.
 app.use((_req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
     "frame-ancestors 'self' https://discord.com https://*.discord.com https://*.discordsays.com"
   );
-  res.setHeader('X-Frame-Options', 'ALLOWALL');
   next();
 });
 

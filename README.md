@@ -201,8 +201,12 @@ Para quem mexe no código:
 
 - **Compartilhar do celular.** Nenhum navegador de celular permite.
 - **Som de programa instalado** em tela cheia. Só som de aba (veja acima).
-- **Muita gente ao mesmo tempo.** Cada pessoa assistindo consome uns 2 Mb/s da
-  sua internet. Cinco pessoas já são 10 Mb/s.
+- **Muita gente ao mesmo tempo.** Cada pessoa assistindo consome a qualidade
+  escolhida, inteira. Em 2,5 Mb/s, cinco pessoas já são 12,5 Mb/s de subida; em
+  8 Mb/s, são 40.
+- **60 fps em qualquer computador.** Se o navegador não tiver codificação por
+  hardware, ele não dá conta de 60 quadros em tela grande e entrega menos. A
+  página de captura avisa quando isso acontece.
 - **Mais de 4 telas ao mesmo tempo** na mesma sala.
 
 Se você mexe em código e quer entender as decisões por trás disso,

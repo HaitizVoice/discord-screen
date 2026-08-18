@@ -60,6 +60,15 @@ app.post('/api/token', async (req, res) => {
   const { code } = req.body ?? {};
   if (!code) return res.status(400).json({ error: 'code obrigatorio' });
 
+  // Sem credencial não há troca possível, e o erro que o Discord devolve nesse
+  // caso não deixa isso óbvio para ninguém. Dizer aqui poupa a caçada.
+  if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
+    console.error('[oauth] DISCORD_CLIENT_ID ou DISCORD_CLIENT_SECRET ausente no .env');
+    return res.status(500).json({
+      error: 'O servidor está sem as credenciais do Discord. Rode: npm run configurar',
+    });
+  }
+
   try {
     const r = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
@@ -74,8 +83,12 @@ app.post('/api/token', async (req, res) => {
 
     const data = await r.json();
     if (!data.access_token) {
-      console.error('[oauth] falhou:', data);
-      return res.status(401).json({ error: 'troca de token falhou' });
+      console.error('[oauth] Discord recusou a troca:', data);
+      // O motivo do Discord vai junto: "invalid_client" é secret errado,
+      // "invalid_grant" é código já usado ou expirado. Sem isso, quem vê a
+      // tela não tem como saber qual dos dois é.
+      const motivo = data.error_description || data.error || 'motivo não informado';
+      return res.status(401).json({ error: `O Discord recusou o login: ${motivo}` });
     }
     res.json({ access_token: data.access_token });
   } catch (err) {

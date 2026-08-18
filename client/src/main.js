@@ -27,6 +27,7 @@ const watching = new Set(); // slots que eu pedi para assistir
 
 let sdk = null;
 let session = null;
+let clientId = null;
 let ws = null;
 let participants = [];
 let reconnectDelay = 1000;
@@ -740,11 +741,12 @@ boot().catch((err) => {
 
 async function boot() {
   const config = await loadConfig();
+  clientId = config.clientId ?? null;
   checkVersion(config.asset);
 
   // Sem login o lobby ainda abre: dá para ver as salas antes de entrar. Só
   // criar e entrar é que pedem identidade.
-  session = inDiscord ? await authDiscord(config.clientId) : await authWeb();
+  session = inDiscord ? await authDiscord(clientId) : await authWeb();
 
   renderProfileButton();
 
@@ -802,7 +804,7 @@ async function authWeb() {
   // Sem identidade nenhuma: entra como convidado. O login do Discord é uma
   // melhoria opcional, não um pedágio para assistir uma tela.
   if (!identity) {
-    const guest = await post('/api/session-guest', { name: storedName() });
+    const guest = await post('/api/session-guest', { name: storedName() }, { retry: false });
     store('identity', guest.identity);
     identity = guest.identity;
   }
@@ -1180,7 +1182,31 @@ async function authDiscord(clientId) {
 }
 
 
-async function post(url, body) {
+/**
+ * Emite uma identidade nova, jogando fora a que o servidor recusou.
+ *
+ * O crachá vive no localStorage e vale até o servidor trocar o segredo que o
+ * assina. Quando isso acontece — reinstalação, mudança de máquina, rotação de
+ * segredo —, todo crachá guardado vira inválido de uma vez. Sem isto o cliente
+ * insistia no mesmo token para sempre e a pessoa ficava presa em "sessão
+ * inválida", sem nada na interface que resolvesse.
+ */
+async function renovarIdentidade() {
+  remove('identity');
+  try {
+    session = inDiscord ? await authDiscord(clientId) : await authWeb();
+    renderProfileButton();
+    return session?.identity ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `retry` existe para a chamada que renova a identidade não cair nela mesma:
+ * um 401 ali significa que renovar não resolve, e insistir viraria laço.
+ */
+async function post(url, body, { retry = true } = {}) {
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1190,6 +1216,14 @@ async function post(url, body) {
   const data = await r.json().catch(() => ({}));
 
   if (!r.ok) {
+    // 401 numa chamada que levava identidade quer dizer crachá morto, não falta
+    // de permissão: renova uma vez e repete, em vez de devolver um erro que a
+    // pessoa não tem como resolver.
+    if (r.status === 401 && retry && body?.identity) {
+      const nova = await renovarIdentidade();
+      if (nova) return post(url, { ...body, identity: nova }, { retry: false });
+    }
+
     // O status carrega significado (403 = senha, 429 = bloqueio, 404 = sala
     // fechou), então vai junto do erro em vez de virar texto.
     const err = new Error(data.error ?? `Servidor respondeu ${r.status}.`);
@@ -1210,7 +1244,10 @@ function connect() {
   );
   ws.binaryType = 'arraybuffer';
 
+  let abriu = false;
+
   ws.addEventListener('open', () => {
+    abriu = true;
     reconnectDelay = 1000;
     $('grid').hidden = false;
     setEmpty('Ninguém na sala', 'Aguardando participantes.');
@@ -1321,6 +1358,20 @@ function connect() {
 
     // Saímos da sala de propósito: nada a reconectar.
     if (!roomTokens) return;
+
+    // Fechou sem nunca abrir: o token da sala foi recusado. Guardado, ele não
+    // vale mais depois que o servidor troca o segredo — e reconectar com o
+    // mesmo token repete o 401 até o fim dos tempos. Descartar e recomeçar é o
+    // único caminho que sai daqui.
+    if (!abriu) {
+      const id = roomInfo?.id;
+      limparSala();
+      if (id) remove(`sala:${id}`);
+      toast('Sua sessão expirou. Entrando de novo…');
+      if (inDiscord) entrarNaCall();
+      else showLobby();
+      return;
+    }
 
     setEmpty('Reconectando…', 'A conexão com a sala caiu.');
     // Backoff — evita martelar o servidor se ele estiver fora do ar.

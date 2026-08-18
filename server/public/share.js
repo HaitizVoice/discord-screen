@@ -8,7 +8,7 @@
  * Toda a lógica de captura e codificação vive em /shared/broadcaster.js, a mesma
  * usada dentro da Activity — aqui é só a interface.
  */
-import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=3';
+import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=4';
 
 const $ = (id) => document.getElementById(id);
 
@@ -112,7 +112,11 @@ async function start() {
       $('elapsed').textContent =
         `${String(Math.floor(s.seconds / 60)).padStart(2, '0')}:${String(s.seconds % 60).padStart(2, '0')}`;
     },
-    onAviso: (msg) => setStatus(msg, 'aviso'),
+    onAviso: (msg) => {
+      setStatus(msg, 'aviso');
+      // O aviso sozinho é um beco: o botão é a saída dele.
+      $('somAba').hidden = false;
+    },
     onEnd: (reason) => {
       broadcaster = null;
       $('preview').srcObject = null;
@@ -138,5 +142,18 @@ async function start() {
     );
   }
 }
+
+// Mantém o vídeo como está e troca só de onde vem o som — a única fonte que
+// não carrega o Discord junto é uma aba.
+$('somAba').addEventListener('click', async () => {
+  if (!broadcaster) return;
+  try {
+    await broadcaster.trocarSom();
+    setStatus('Som ligado, vindo da aba escolhida.', 'ok');
+    $('somAba').textContent = 'Trocar a aba do som';
+  } catch (err) {
+    if (err.name !== 'NotAllowedError') setStatus(err.message, 'error');
+  }
+});
 
 window.addEventListener('beforeunload', () => broadcaster?.stop());

@@ -656,6 +656,13 @@ function renderBar() {
   // A engrenagem só aparece para transmissão nascida aqui: a que roda na aba
   // externa é configurada por lá, e daqui não dá para mexer nela.
   $('liveSettings').hidden = !myBroadcast;
+  // Pediram som e ele foi barrado: a engrenagem pisca, porque é atrás dela que
+  // está a saída. Sem isso o aviso passa no toast e ninguém acha o caminho.
+  const somPendente = Boolean(myBroadcast?.somBloqueado?.());
+  $('liveSettings').classList.toggle('atencao', somPendente);
+  $('liveSettings').dataset.tip = somPendente
+    ? 'Som barrado — clique para escolher a aba'
+    : 'Ajustes da transmissão';
 
   // O controle de som só existe quando há som para controlar.
   const temSom = [...streams.values()].some((s) => s.audio);
@@ -759,6 +766,12 @@ function ensureStatsTimer() {
     $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
     $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
     $('pRes').textContent = s.player.getSizes().video;
+
+    // Quatro estados diferentes que, sem isto, parecem todos "sem som".
+    if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
+    else if (!s.audio.temSom()) $('pSom').textContent = 'aguardando o áudio…';
+    else if (volume === 0) $('pSom').textContent = 'silenciado aqui';
+    else $('pSom').textContent = `tocando · ${Math.round(volume * 100)}%`;
   }, 1000);
 }
 
@@ -1496,7 +1509,12 @@ function openModal(mode) {
   $('modalSwap').hidden = !live;
   $('modalNote').hidden = live;
 
+  $('modalSom').hidden = !live || !myBroadcast;
   if (live && myBroadcast) {
+    $('modalSom').textContent = myBroadcast.temSom()
+      ? 'Trocar a aba do som'
+      : 'Som de uma aba';
+
     const s = myBroadcast.getSettings();
     $('mQuality').value = String(s.bitrate);
     $('mFps').value = String(s.fps);
@@ -1544,6 +1562,20 @@ $('modalSwap').addEventListener('click', async () => {
   }
 });
 
+// A saída para quem quer tela inteira COM som: o vídeo continua o mesmo e o som
+// passa a vir de uma aba, que é a única fonte isolada do Discord.
+$('modalSom').addEventListener('click', async () => {
+  if (!myBroadcast) return;
+  try {
+    await myBroadcast.trocarSom();
+    toast('Som ligado, vindo da aba escolhida.');
+    closeModal();
+    renderBar();
+  } catch (err) {
+    if (err.name !== 'NotAllowedError') toast(err.message, true);
+  }
+});
+
 const closeModal = () => {
   $('modal').hidden = true;
 };
@@ -1574,7 +1606,7 @@ async function broadcastFromHere() {
     bitrate: Number($('mQuality').value),
     fps: Number($('mFps').value),
     audio: $('mAudio').checked,
-    onAviso: (m) => toast(m),
+    onAviso: (m) => toast(m, true),
     onEnd: () => {
       myBroadcast = null;
       renderBar();

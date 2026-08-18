@@ -249,8 +249,25 @@ async function inVoiceChannel(guildId, channelId, userId) {
       { headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` } }
     );
 
-    // 404 = a pessoa não está em call nenhuma nesse servidor.
-    if (r.status === 404) return 'fora';
+    if (r.status === 404) {
+      // Dois 404 bem diferentes chegam aqui, e tratá-los igual trancava a
+      // atividade para fora.
+      //
+      // "Unknown Guild" (10004) quer dizer que o BOT não está neste servidor —
+      // o caso de quem instalou a atividade na própria conta, sem adicionar bot
+      // nenhum. Isso não diz nada sobre a pessoa estar em call: é falta de
+      // visibilidade nossa, não ausência dela. Antes virava "fora", o que
+      // devolvia 403 e a atividade abria em "Não foi possível entrar".
+      //
+      // Qualquer outro 404 é o que o nome sugere: não há estado de voz para
+      // essa pessoa neste servidor, então ela está fora da call.
+      const erro = await r.json().catch(() => ({}));
+      if (erro?.code === 10004) {
+        console.warn('[voz] o bot nao esta neste servidor — escopo cai para a instancia');
+        return 'indisponivel';
+      }
+      return 'fora';
+    }
     if (!r.ok) {
       console.warn(`[voz] Discord respondeu ${r.status} — verificação ignorada`);
       return 'indisponivel';

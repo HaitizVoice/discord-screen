@@ -18,6 +18,7 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
 import { lerEnv, gravarEnv, cor } from './env.mjs';
+import { garantirEntryPoint, contarEntryPoint } from './entry-point.mjs';
 import { abrirTunel } from './tunel.mjs';
 import { RAIZ, VITE, acompanhar, derrubar, encerrandoAgora } from './processos.mjs';
 
@@ -86,6 +87,10 @@ async function configurar(atual) {
     DISCORD_CLIENT_ID,
     DISCORD_CLIENT_SECRET,
   });
+
+  // Confere aqui, com as credenciais em mao, o atalho que faz a atividade
+  // aparecer no foguete. Sem isto era uma configuracao manual invisivel.
+  contarEntryPoint(await garantirEntryPoint(DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET));
 
   linha(`\n${cor.verde}  Guardado.${cor.fim}`);
   nota('  O que falta colar no portal do Discord aparece junto com o endereço,');

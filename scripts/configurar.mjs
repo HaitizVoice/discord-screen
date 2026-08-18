@@ -15,6 +15,7 @@ import { stdin, stdout } from 'node:process';
 import crypto from 'node:crypto';
 
 import { lerEnv, gravarEnv, cor } from './env.mjs';
+import { garantirEntryPoint, contarEntryPoint } from './entry-point.mjs';
 
 const linha = (texto = '') => console.log(texto);
 const titulo = (texto) => linha(`\n${cor.forte}${texto}${cor.fim}`);
@@ -144,6 +145,10 @@ const origem = PUBLIC_ORIGIN.replace(/\/+$/, '');
 const dominio = origem.replace(/^https:\/\//, '');
 
 gravarEnv({ SESSION_SECRET, DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET, PUBLIC_ORIGIN: origem });
+
+// Confere aqui, com as credenciais em mão, o atalho que faz a atividade
+// aparecer no foguete. Sem isto era uma configuração manual invisível.
+contarEntryPoint(await garantirEntryPoint(DISCORD_CLIENT_ID, DISCORD_CLIENT_SECRET));
 
 titulo('  Passo 3 de 3 · Volte ao site do Discord');
 linha();

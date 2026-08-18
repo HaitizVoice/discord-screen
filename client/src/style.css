@@ -693,6 +693,11 @@ button {
   transition: border-color 0.15s, background 0.15s;
 }
 
+.room-card-call {
+  background: #2b2f3a;
+  border-color: var(--accent);
+}
+
 .room-card:hover {
   background: #35373d;
   border-color: var(--accent);

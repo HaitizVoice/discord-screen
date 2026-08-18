@@ -124,6 +124,31 @@ const run = async () => {
     !semLogin.body.rooms.some((r) => r.name === 'Sala Aberta')
   );
 
+  // --------------------------------------------------------- sala da call
+  const semCall = await api('/api/rooms/call', { identity: bob.identity });
+  check('sala da call exige confirmacao do Discord', semCall.status === 403);
+
+  const naCall = (await api('/api/session-dev', { instance_id: TEST_INSTANCE, name: 'Vera', call: 'canal-9' })).body;
+  const outraCall = (await api('/api/session-dev', { instance_id: TEST_INSTANCE, name: 'Ugo', call: 'canal-8' })).body;
+
+  const callRoom = await api('/api/rooms/call', { identity: naCall.identity });
+  check('quem esta na call entra direto', callRoom.status === 200);
+
+  const mesmaSala = await api('/api/rooms/call', { identity: naCall.identity });
+  check('a sala da call e sempre a mesma', mesmaSala.body.roomId === callRoom.body.roomId);
+
+  const invasor = await api('/api/rooms/join', {
+    identity: outraCall.identity,
+    roomId: callRoom.body.roomId,
+  });
+  check('quem esta em outra call nao entra', invasor.status === 403);
+
+  const semCallNaLista = await api('/api/rooms/join', {
+    identity: bob.identity,
+    roomId: callRoom.body.roomId,
+  });
+  check('sem call confirmada nao entra pela lista', semCallNaLista.status === 403);
+
   // -------------------------------------------------------------- senha
   const semSenha = await api('/api/rooms/join', {
     identity: bob.identity,

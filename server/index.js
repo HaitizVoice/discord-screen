@@ -16,6 +16,7 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 const {
   DISCORD_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
+  DISCORD_BOT_TOKEN,
   PUBLIC_ORIGIN = 'http://localhost:3001',
   PORT = 3001,
   NODE_ENV = 'development',
@@ -83,7 +84,7 @@ app.post('/api/token', async (req, res) => {
  * cada clique.
  */
 app.post('/api/session', async (req, res) => {
-  const { access_token, instance_id } = req.body ?? {};
+  const { access_token, instance_id, guild_id, channel_id } = req.body ?? {};
   if (!access_token || !instance_id) {
     return res.status(400).json({ error: 'access_token e instance_id obrigatorios' });
   }
@@ -95,7 +96,25 @@ app.post('/api/session', async (req, res) => {
 
     if (!me?.id) return res.status(401).json({ error: 'token invalido' });
 
-    res.json(issueIdentity(instance_id, me.id, me.global_name || me.username, me.avatar ?? null));
+    const presenca = await inVoiceChannel(guild_id, channel_id, me.id);
+    if (presenca === 'fora') {
+      return res.status(403).json({ error: 'Entre na call antes de abrir a atividade.' });
+    }
+
+    // O canal entra no token assinado, não fica só na resposta: é o que permite
+    // ao endpoint da sala da call confiar sem consultar o Discord de novo.
+    const verificado = presenca === 'ok' ? { call: channel_id } : {};
+
+    const identity = issueIdentity(
+      instance_id,
+      me.id,
+      me.global_name || me.username,
+      me.avatar ?? null,
+      8 * 60 * 60,
+      verificado
+    );
+
+    res.json({ ...identity, call: presenca === 'ok' ? channel_id : null });
   } catch (err) {
     console.error('[session] erro:', err);
     res.status(500).json({ error: 'erro interno' });
@@ -118,8 +137,8 @@ app.post('/api/session', async (req, res) => {
  */
 app.post('/api/session-dev', (req, res) => {
   if (isProd) return res.status(404).end();
-  const { instance_id = 'dev', name = 'Dev' } = req.body ?? {};
-  res.json(issueIdentity(instance_id, `dev-${name}`, name, null));
+  const { instance_id = 'dev', name = 'Dev', call = null } = req.body ?? {};
+  res.json(issueIdentity(instance_id, `dev-${name}`, name, null, 8 * 60 * 60, call ? { call } : {}));
 });
 
 app.post('/api/session-guest', (req, res) => {
@@ -129,12 +148,46 @@ app.post('/api/session-guest', (req, res) => {
   res.json(issueIdentity(WEB_INSTANCE, uid, name, null, 30 * 24 * 60 * 60));
 });
 
-function issueIdentity(instance, uid, name, avatar, ttl = 8 * 60 * 60) {
+function issueIdentity(instance, uid, name, avatar, ttl = 8 * 60 * 60, extra = {}) {
   return {
     user: { id: uid, name, avatar },
     instance,
-    identity: signToken({ instance, uid, name, av: avatar, scope: 'identity' }, ttl),
+    identity: signToken({ instance, uid, name, av: avatar, scope: 'identity', ...extra }, ttl),
   };
+}
+
+/**
+ * Confirma pelo Discord que a pessoa está mesmo naquela call.
+ *
+ * Sem isto o escopo por canal é obscuridade, não segurança: o `instance_id`
+ * vem do cliente, e um cliente adulterado pode alegar qualquer canal. Aqui
+ * quem responde é o Discord, com o token do bot.
+ *
+ * @returns {'ok'|'fora'|'indisponivel'}
+ */
+async function inVoiceChannel(guildId, channelId, userId) {
+  if (!DISCORD_BOT_TOKEN || !guildId || !channelId) return 'indisponivel';
+
+  try {
+    const r = await fetch(
+      `https://discord.com/api/v10/guilds/${guildId}/voice-states/${userId}`,
+      { headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` } }
+    );
+
+    // 404 = a pessoa não está em call nenhuma nesse servidor.
+    if (r.status === 404) return 'fora';
+    if (!r.ok) {
+      console.warn(`[voz] Discord respondeu ${r.status} — verificação ignorada`);
+      return 'indisponivel';
+    }
+
+    const state = await r.json();
+    return state?.channel_id === channelId ? 'ok' : 'fora';
+  } catch (err) {
+    // Falha de rede não pode trancar todo mundo para fora.
+    console.warn('[voz] falhou:', err.message);
+    return 'indisponivel';
+  }
 }
 
 /** Valida o token de identidade que acompanha toda operação de sala. */
@@ -195,13 +248,43 @@ app.post('/api/rooms/create', (req, res) => {
   res.json(issueRoomTokens(room.id, me));
 });
 
+/**
+ * Entra na sala da call, criando-a se ainda não existir.
+ *
+ * A permissão vem do token: só quem o Discord confirmou estar conectado ao
+ * canal recebe o claim `call`. Sem senha — a própria call é a porta.
+ */
+app.post('/api/rooms/call', (req, res) => {
+  const me = identityOf(req, res);
+  if (!me) return;
+
+  if (!me.call) {
+    return res.status(403).json({ error: 'Não foi possível confirmar que você está na call.' });
+  }
+
+  const room = R.ensureCallRoom(me.instance, me.call);
+  res.json(issueRoomTokens(room.id, me));
+});
+
 app.post('/api/rooms/join', (req, res) => {
   const me = identityOf(req, res);
   if (!me) return;
 
   const room = R.getRoom(req.body?.roomId);
-  // Mesma instância: salas de um canal de voz não aparecem em outro.
-  if (!room || room.instance !== me.instance) {
+  if (!room) return res.status(404).json({ error: 'Sala não existe mais.' });
+
+  // A sala da call é avaliada antes da instância: quem manda nela é a presença
+  // no canal, confirmada pelo Discord. Checar instância aqui recusaria por
+  // motivo errado, já que o id dela vem do canal e não da instância.
+  if (room.isCall) {
+    if (room.id !== `call-${me.call}`) {
+      return res.status(403).json({ error: 'Entre na call para acessar esta sala.' });
+    }
+    return res.json(issueRoomTokens(room.id, me));
+  }
+
+  // Salas comuns: as de um canal de voz não aparecem nem abrem em outro.
+  if (room.instance !== me.instance) {
     return res.status(404).json({ error: 'Sala não existe mais.' });
   }
 

@@ -553,6 +553,7 @@ async function authWeb() {
   return {
     identity,
     isGuest: String(payload.uid).startsWith('guest-'),
+    call: payload.call ?? null,
     user: { id: payload.uid, name: payload.name, avatar: payload.av ?? null },
   };
 }
@@ -661,12 +662,21 @@ async function loadRooms() {
 
   lobbyRooms = rooms;
 
-  if (!rooms.length) {
+  // A sala da call vem primeiro e existe mesmo antes de alguém entrar: é o
+  // caminho de um clique para quem só quer mostrar a tela para a call.
+  const cards = rooms.map(roomCard);
+  if (session?.call && !rooms.some((r) => r.isCall)) {
+    cards.unshift(
+      roomCard({ id: `call-${session.call}`, name: 'Sala da call', owner: 'a call', isCall: true, people: 0, streams: 0 })
+    );
+  }
+
+  if (!cards.length) {
     list.replaceChildren(msgRow('Nenhuma sala aberta. Crie a primeira.'));
     return;
   }
 
-  list.replaceChildren(...rooms.map(roomCard));
+  list.replaceChildren(...cards);
 }
 
 function msgRow(text) {
@@ -678,12 +688,18 @@ function msgRow(text) {
 
 function roomCard(room) {
   const card = document.createElement('button');
-  card.className = 'room-card';
+  card.className = room.isCall ? 'room-card room-card-call' : 'room-card';
 
   const top = document.createElement('div');
   top.className = 'room-card-top';
 
-  if (room.locked) {
+  if (room.isCall) {
+    top.insertAdjacentHTML(
+      'afterbegin',
+      '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/>' +
+        '<path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></svg>'
+    );
+  } else if (room.locked) {
     top.insertAdjacentHTML(
       'afterbegin',
       '<svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/>' +
@@ -700,7 +716,9 @@ function roomCard(room) {
   const meta = document.createElement('span');
   meta.className = 'room-card-meta';
   const pessoas = room.people === 1 ? '1 pessoa' : `${room.people} pessoas`;
-  meta.textContent = `${pessoas} · por ${room.owner}`;
+  meta.textContent = room.isCall
+    ? `${pessoas} · só quem está na call`
+    : `${pessoas} · por ${room.owner}`;
 
   card.append(top, meta);
 
@@ -717,6 +735,18 @@ function roomCard(room) {
 
 async function enterRoom(room, password) {
   if (!session) return;
+
+  // A sala da call tem porta própria: quem valida é a presença no canal.
+  if (room.isCall) {
+    try {
+      const tokens = await post(`${P}/api/rooms/call`, { identity: session.identity });
+      openRoom(tokens, room);
+    } catch (err) {
+      toast(err.message, true);
+    }
+    return;
+  }
+
   try {
     const tokens = await post(`${P}/api/rooms/join`, {
       identity: session.identity,
@@ -867,7 +897,14 @@ async function authDiscord() {
   const { access_token } = await post(`${P}/api/token`, { code });
   await sdk.commands.authenticate({ access_token });
 
-  return post(`${P}/api/session`, { access_token, instance_id: sdk.instanceId });
+  // guild/channel vão junto para o servidor poder confirmar, pelo Discord, que
+  // a pessoa está mesmo naquela call.
+  return post(`${P}/api/session`, {
+    access_token,
+    instance_id: sdk.instanceId,
+    guild_id: sdk.guildId,
+    channel_id: sdk.channelId,
+  });
 }
 
 

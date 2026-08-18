@@ -134,6 +134,44 @@ export function createRoom({ instance, name, ownerId, ownerName, password }) {
 
 export const getRoom = (id) => rooms.get(id) ?? null;
 
+/**
+ * A sala fixa de uma call: id derivado do canal, criada na primeira entrada.
+ *
+ * Não tem dono nem senha — quem controla o acesso é a própria call, já que só
+ * entra quem o Discord confirmou estar conectado ao canal.
+ */
+export function ensureCallRoom(instance, channelId) {
+  const id = `call-${channelId}`;
+  let room = rooms.get(id);
+  if (room) {
+    // A instância da Activity muda a cada relançamento no mesmo canal; o canal
+    // é que é estável. Sem atualizar, a sala sumiria da lista após um relaunch.
+    room.instance = instance;
+    return room;
+  }
+
+  room = {
+    id,
+    instance,
+    name: 'Sala da call',
+    isCall: true,
+    ownerId: null,
+    ownerName: 'a call',
+    password: null,
+    attempts: [],
+    lockedUntil: 0,
+    createdAt: Date.now(),
+    emptySince: Date.now(),
+    broadcasters: new Map(),
+    slots: new Map(),
+    viewers: new Set(),
+    droppedChunks: 0,
+  };
+
+  rooms.set(id, room);
+  return room;
+}
+
 /** Lista pública: nunca vaza hash de senha, só se ela existe. */
 export function listRooms(instance) {
   return [...rooms.values()]
@@ -143,6 +181,7 @@ export function listRooms(instance) {
       id: r.id,
       name: r.name,
       owner: r.ownerName,
+      isCall: Boolean(r.isCall),
       locked: Boolean(r.password),
       people: countPeople(r),
       streams: [...r.broadcasters.values()].filter((e) => e.streaming).length,

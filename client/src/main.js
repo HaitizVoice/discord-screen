@@ -222,6 +222,11 @@ function renderGrid() {
   grid.classList.toggle('palco', noPalco);
   grid.classList.toggle('cheia', noPalco && telaCheia);
 
+  // Com a lateral no ar, a contagem no topo repete o que está logo ali — e
+  // custa uma faixa inteira de altura, que é o que falta para a tela. Vazia, a
+  // barra de cima se recolhe sozinha.
+  $('people').hidden = noPalco && !telaCheia;
+
   // Os canvas são reanexados abaixo; removê-los daqui não perde o conteúdo.
   grid.replaceChildren();
 
@@ -266,10 +271,12 @@ function buildSidebar(casters) {
     secaoTitulo(participants.length === 1 ? '1 pessoa' : `${participants.length} pessoas`)
   );
 
-  // Duas colunas: o mesmo quadro da grade, no tamanho que a lateral comporta.
+  // semVideo é obrigatório aqui: o canvas de cada transmissão é um nó de DOM
+  // só, e anexá-lo neste tile o arrancaria do palco — que ficaria preto
+  // enquanto a miniatura ao lado mostrava a tela.
   const gente = document.createElement('div');
   gente.className = 'sidebar-people';
-  for (const p of participants) gente.append(buildTile(p).el);
+  for (const p of participants) gente.append(buildTile(p, { semVideo: true }).el);
   barra.append(gente);
 
   return barra;
@@ -287,9 +294,13 @@ function secaoTitulo(texto) {
  *
  * `palco` distingue o tile em destaque dos da lateral, e é o que decide o que o
  * clique faz: no palco, alterna tela cheia; na lateral, promove aquela tela.
+ *
+ * `semVideo` força o avatar mesmo para quem está transmitindo. É o que permite
+ * a mesma pessoa aparecer no palco e na lista de pessoas sem que os dois
+ * disputem o único canvas daquela transmissão.
  */
-function buildTile(p, { palco = false } = {}) {
-  const slot = p.broadcasting ? slotOf(p.id) : null;
+function buildTile(p, { palco = false, semVideo = false } = {}) {
+  const slot = p.broadcasting && !semVideo ? slotOf(p.id) : null;
   const stream = slot !== null ? streams.get(slot) : null;
   const isMe = p.id === session?.user?.id;
 
@@ -1197,7 +1208,7 @@ async function authDiscord(fonteDoId) {
     scope: ['identify'],
   });
 
-  const { access_token } = await post(`${P}/api/token`, { code });
+  const { access_token } = await post(`${P}/api/token`, { code, client_id: clientId });
   await sdk.commands.authenticate({ access_token });
 
   // guild/channel vão junto para o servidor poder confirmar, pelo Discord, que

@@ -17,10 +17,15 @@ const {
   DISCORD_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
   DISCORD_BOT_TOKEN,
-  PUBLIC_ORIGIN = 'http://localhost:3001',
+  PUBLIC_ORIGIN: ORIGEM_CRUA = 'http://localhost:3001',
   PORT = 3001,
   NODE_ENV = 'development',
 } = process.env;
+
+// Uma barra sobrando no fim se propaga: o shareUrl vira "//share.html" e o
+// redirect do OAuth vira "//auth/callback", que não bate com o endereço
+// cadastrado no portal. O login falha sem explicar nada.
+const PUBLIC_ORIGIN = ORIGEM_CRUA.replace(/[/]+$/, '');
 
 const isProd = NODE_ENV === 'production';
 
@@ -57,8 +62,22 @@ app.use(
 
 /** Troca o code do OAuth pelo access_token. O secret nunca sai do servidor. */
 app.post('/api/token', async (req, res) => {
-  const { code } = req.body ?? {};
+  const { code, client_id } = req.body ?? {};
   if (!code) return res.status(400).json({ error: 'code obrigatorio' });
+
+  // A metade que autoriza é a aplicação que abriu a atividade; a metade que
+  // troca o código é este servidor. Se forem aplicações diferentes, o Discord
+  // recusa — e o erro dele não diz qual das duas está errada.
+  if (client_id && DISCORD_CLIENT_ID && client_id !== DISCORD_CLIENT_ID) {
+    console.error(
+      `[oauth] atividade e da aplicacao ${client_id}, mas o .env tem ${DISCORD_CLIENT_ID}`
+    );
+    return res.status(409).json({
+      error:
+        `Esta atividade é da aplicação ${client_id}, mas o servidor está configurado ` +
+        `com a ${DISCORD_CLIENT_ID}. As duas precisam ser a mesma.`,
+    });
+  }
 
   // Sem credencial não há troca possível, e o erro que o Discord devolve nesse
   // caso não deixa isso óbvio para ninguém. Dizer aqui poupa a caçada.
@@ -675,7 +694,9 @@ server.listen(PORT, () => {
   console.log('');
 
   if (DISCORD_CLIENT_ID) {
-    console.log(`  Discord: ligado · endereço público ${PUBLIC_ORIGIN}`);
+    console.log(`  Discord: ligado · aplicação ${DISCORD_CLIENT_ID}`);
+    console.log(`  Endereço público: ${PUBLIC_ORIGIN}`);
+    console.log(`  Redirect que precisa estar no portal: ${PUBLIC_ORIGIN}/auth/callback`);
   } else {
     console.log('  Discord: desligado (só navegador).');
     console.log('  Para usar dentro do Discord, rode: npm run configurar');

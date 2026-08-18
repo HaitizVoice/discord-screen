@@ -45,15 +45,23 @@ const ENDERECO = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
  * servem a comandos com intenções opostas: o `dev --rapido` só quer ver o que
  * o túnel descartável faz, sem desconfigurar a instalação de quem testa; o
  * `start:fast` quer justamente deixar o endereço registrado. Por padrão grava,
- * menos quando o rápido foi forçado por cima de uma configuração existente.
+ * menos quando o rápido foi forçado por cima de uma configuração existente —
+ * e nesse caso nem um `gravar: true` explícito passa por cima, porque apagar
+ * o endereço fixo de quem tem túnel nomeado nunca é o que se quis pedir.
  *
  * @param {{aoEndereco?: (origem: string | null) => void, rapido?: boolean, gravar?: boolean}} opcoes
  */
 export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar } = {}) {
-  const escrever = gravar ?? !rapido;
   const env = lerEnv();
   const porta = env.PORT || '3001';
   const config = rapido ? '' : env.TUNEL_CONFIG || '';
+
+  // Um túnel descartável nunca sobrescreve o endereço de quem tem túnel
+  // nomeado, nem quando quem pediu foi o `start:fast`. O fixo é a configuração
+  // da pessoa; o descartável vale só enquanto a janela estiver aberta — e o
+  // endereço chega a quem chamou por `aoEndereco`, então nada se perde por não
+  // gravar.
+  const escrever = (gravar ?? !rapido) && !(rapido && env.TUNEL_CONFIG);
 
   // --no-autoupdate: o cloudflared se atualiza sozinho e reinicia no meio do
   // caminho, derrubando o túnel sem explicação. Quem manda na versão aqui é o
@@ -70,8 +78,20 @@ export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar
   tunel.fixo = Boolean(config);
 
   if (config) {
-    // Endereço fixo: não há o que descobrir na saída do cloudflared.
-    const origem = env.PUBLIC_ORIGIN || '';
+    // Endereço fixo: quem sabe qual é ele é o arquivo de configuração do
+    // túnel, não o `.env`. Ali o endereço é só uma cópia, e cópia sai de
+    // sincronia — bastava um `start:fast` no meio do caminho para o
+    // `PUBLIC_ORIGIN` virar o endereço descartável daquela execução, e o túnel
+    // nomeado passar a subir anunciando um endereço que já morreu. Lendo o
+    // hostname do ingress, o modo fixo se corrige sozinho.
+    const doArquivo = hostnameDoConfig(config);
+    const origem = doArquivo || env.PUBLIC_ORIGIN || '';
+
+    if (origem && origem !== env.PUBLIC_ORIGIN) {
+      gravarEnv({ PUBLIC_ORIGIN: origem });
+      console.log(`${cor.amarelo}  O .env apontava para outro endereço — corrigi para o do túnel.${cor.fim}`);
+    }
+
     console.log(`${cor.verde}  ${origem || '(endereço definido no config do túnel)'}${cor.fim}\n`);
     aoEndereco(origem || null);
     return tunel;
@@ -91,6 +111,34 @@ export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar
   tunel.stdout.on('data', procurar);
   tunel.stderr.on('data', procurar);
   return tunel;
+}
+
+/**
+ * O endereço público declarado no config de um túnel nomeado.
+ *
+ * Um parser de YAML inteiro seria exagero para uma linha: o que interessa é a
+ * primeira regra de ingress com hostname, que é por onde o mundo chega aqui.
+ * As outras, quando existem, são o catch-all de 404.
+ *
+ * @returns {string} vazio quando o arquivo sumiu ou não declara hostname — um
+ * túnel roteado só por DNS, por exemplo. Aí vale o que estiver no `.env`.
+ */
+function hostnameDoConfig(caminho) {
+  try {
+    const host = fs
+      .readFileSync(caminho, 'utf8')
+      .split('\n')
+      .map((linha) => linha.replace(/#.*/, '').trim())
+      .find((linha) => /^-?\s*hostname:\s*\S/.test(linha))
+      ?.split(':')
+      .slice(1)
+      .join(':')
+      .trim();
+
+    return host ? `https://${host.replace(/^https?:\/\//, '').replace(/\/+$/, '')}` : '';
+  } catch {
+    return '';
+  }
 }
 
 /**

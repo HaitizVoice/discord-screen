@@ -34,15 +34,28 @@ async function api(path, body) {
 // do site e as salas de teste apareceriam para usuários de verdade.
 const TEST_INSTANCE = `teste-${Date.now().toString(36)}`;
 
+// Instancias derivadas da execucao, nunca fixas: salas vazias so fecham depois
+// de uma carencia, e com nome fixo duas rodadas seguidas enxergavam as salas
+// uma da outra — o teste falhava sem nada estar quebrado.
+const CANAL_A = `${TEST_INSTANCE}-a`;
+const CANAL_B = `${TEST_INSTANCE}-b`;
+
 const identity = async (instance, name) =>
   (await api('/api/session-dev', { instance_id: instance ?? TEST_INSTANCE, name })).body;
 
 /** Quadro no formato do protocolo: [1B slot][1B tipo][8B ts][8B envio][payload] */
 function frame(slot, isKeyframe, payload) {
+  return pacote(slot, isKeyframe ? 1 : 2, payload);
+}
+
+/** Pacote de audio: tipo 3, sem a maquina de estados do keyframe. */
+const audioPacote = (slot, payload) => pacote(slot, 3, payload);
+
+function pacote(slot, tipo, payload) {
   const data = Buffer.from(payload);
   const buf = Buffer.alloc(18 + data.length);
   buf.writeUInt8(slot, 0);
-  buf.writeUInt8(isKeyframe ? 1 : 2, 1);
+  buf.writeUInt8(tipo, 1);
   buf.writeDoubleBE(0, 2);
   buf.writeDoubleBE(Date.now(), 10);
   data.copy(buf, 18);
@@ -67,15 +80,17 @@ const openViewer = (t) => open(`${WSB}/ws?t=${encodeURIComponent(t.viewerToken)}
 const openCaster = (t) =>
   open(`${WSB}/ws?t=${encodeURIComponent(new URL(t.shareUrl).searchParams.get('t'))}`);
 const lastState = (ws) => [...ws.recv.json].reverse().find((m) => m.type === 'state');
-const binsOfSlot = (ws, slot) => ws.recv.bin.filter((b) => b[0] === slot);
+// So video: audio anda pelo mesmo slot e contaria junto, embaralhando o que
+// estas checagens medem.
+const binsOfSlot = (ws, slot) => ws.recv.bin.filter((b) => b[0] === slot && b[1] !== 3);
 
 const run = async () => {
   const health = await fetch(`${BASE}/api/health`).then((r) => r.json());
   check('health responde', health.ok === true);
 
   // ============================================================== API de salas
-  const alice = await identity('canal-1', 'Alice');
-  const bob = await identity('canal-1', 'Bob');
+  const alice = await identity(CANAL_A, 'Alice');
+  const bob = await identity(CANAL_A, 'Bob');
   check('identidade assinada emitida', Boolean(alice.identity));
 
   const g1 = (await api('/api/session-guest', { name: '' })).body;
@@ -125,8 +140,28 @@ const run = async () => {
   );
 
   // --------------------------------------------------------- sala da call
+  // Sem o bot configurado nao ha confirmacao de canal: a sala vira a da
+  // instancia da Activity. Precisa abrir, e precisa ser a mesma para quem
+  // esta na mesma instancia — e so para eles.
   const semCall = await api('/api/rooms/call', { identity: bob.identity });
-  check('sala da call exige confirmacao do Discord', semCall.status === 403);
+  check('sem o bot, a atividade ainda abre uma sala', semCall.status === 200);
+
+  const semCallDeNovo = await api('/api/rooms/call', { identity: alice.identity });
+  check(
+    'mesma instancia cai na mesma sala',
+    semCallDeNovo.body.roomId === semCall.body.roomId,
+    semCall.body.roomId
+  );
+
+  const outraInstancia = await identity(CANAL_B, 'Zeca');
+  const salaDeOutroCanal = await api('/api/rooms/call', { identity: outraInstancia.identity });
+  check('outra instancia cai em sala diferente', salaDeOutroCanal.body.roomId !== semCall.body.roomId);
+
+  const forasteiro = await api('/api/rooms/join', {
+    identity: outraInstancia.identity,
+    roomId: semCall.body.roomId,
+  });
+  check('quem e de outra instancia nao entra na sala dela', forasteiro.status === 403);
 
   const naCall = (await api('/api/session-dev', { instance_id: TEST_INSTANCE, name: 'Vera', call: 'canal-9' })).body;
   const outraCall = (await api('/api/session-dev', { instance_id: TEST_INSTANCE, name: 'Ugo', call: 'canal-8' })).body;
@@ -280,6 +315,32 @@ const run = async () => {
   await sleep(80);
   check('keyframe destrava o viewer', binsOfSlot(viewer, slot1).length === 1);
 
+  // ------------------------------------------------------------------ audio
+  // Som nao depende de keyframe: cada pacote Opus se decodifica sozinho. Se ele
+  // passasse pelo mesmo bloqueio do video, quem entra no meio ficaria mudo ate
+  // o proximo keyframe — mas o opt-in continua valendo igual.
+  const semKey = await openViewer(sala);
+  await sleep(120);
+  semKey.send(JSON.stringify({ type: 'watch', slot: slot1 }));
+  await sleep(120);
+  semKey.recv.bin.length = 0;
+
+  c1.send(audioPacote(slot1, 'SOM-SEM-KEYFRAME'));
+  await sleep(120);
+  check(
+    'audio chega mesmo sem keyframe antes',
+    semKey.recv.bin.some((b) => b[1] === 3 && b.subarray(18).toString() === 'SOM-SEM-KEYFRAME')
+  );
+
+  semKey.send(JSON.stringify({ type: 'unwatch', slot: slot1 }));
+  await sleep(120);
+  semKey.recv.bin.length = 0;
+  c1.send(audioPacote(slot1, 'SOM-POS-UNWATCH'));
+  await sleep(120);
+  check('audio para junto com o unwatch', semKey.recv.bin.length === 0);
+  semKey.close();
+  await sleep(80);
+
   // ------------------------------------------------- segundo transmissor
   const c2 = await openCaster(bobNaSala);
   await sleep(120);
@@ -337,7 +398,42 @@ const run = async () => {
   await sleep(120);
   check('sala diferente nao vaza binarios', outroViewer.recv.bin.length === 0);
 
-  [viewer, c1, c2, outroViewer].forEach((w) => w.close());
+  // ------------------------------------------------- parar de transmitir
+  // Sair da sala precisa encerrar tambem a captura que roda na aba externa:
+  // ela tem conexao propria, entao o unico caminho e o servidor avisa-la.
+  c1.recv.json.length = 0;
+  viewer.send(JSON.stringify({ type: 'stop-broadcast' }));
+  await sleep(150);
+  check(
+    'stop-broadcast chega a aba de captura de quem pediu',
+    c1.recv.json.some((m) => m.type === 'stop-request')
+  );
+
+  // Cada um encerra so a sua: o servidor procura o transmissor pelo uid do
+  // token de quem pediu, nunca por um id vindo da mensagem.
+  c2.recv.json.length = 0;
+  const bobViewer = await openViewer(outraSala);
+  bobViewer.send(JSON.stringify({ type: 'stop-broadcast' }));
+  await sleep(150);
+  check(
+    'stop-broadcast nao derruba a transmissao de outra pessoa',
+    !c2.recv.json.some((m) => m.type === 'stop-request')
+  );
+
+  // ------------------------------------------------------ espelho do avatar
+  const avatarOk = await fetch(`${BASE}/api/avatar/123456789012345678/${'a'.repeat(32)}`);
+  check('avatar com formato valido e repassado ao Discord', avatarOk.status === 404, 'hash inexistente responde 404');
+
+  for (const rota of [
+    '/api/avatar/nao-e-id/' + 'a'.repeat(32),
+    '/api/avatar/123456789012345678/nao-e-hash',
+    '/api/avatar/123456789012345678/' + 'z'.repeat(32),
+  ]) {
+    const r = await fetch(`${BASE}${rota}`);
+    check(`avatar recusa ${rota.split('/').pop().slice(0, 12)}`, r.status === 400);
+  }
+
+  [viewer, c1, c2, outroViewer, bobViewer].forEach((w) => w.close());
   await sleep(120);
 
   console.log(failures ? `\n${failures} verificacao(oes) falharam` : '\nTudo passou');

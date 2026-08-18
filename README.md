@@ -1,232 +1,190 @@
-# Sala de Tela — Activity do Discord
+![Como não compartilhar tela no Discord](como-nao-compartilhar-tela-no-discord-banner.png)
 
-Sala de compartilhamento de tela dentro do Discord. Uma pessoa transmite, todo mundo
-assiste sem sair da Activity.
+# Sala de Tela
 
-## Por que a arquitetura é assim
+Mostre sua tela para quem está na mesma call do Discord.
+Uma pessoa compartilha, todo mundo assiste sem sair do Discord.
 
-Duas restrições da plataforma definiram o desenho inteiro:
+Também funciona como site normal, fora do Discord, com salas que você cria e
+compartilha por link.
 
-1. **A Activity roda num iframe cross-origin.** `getDisplayMedia()` é negado por padrão
-   nesse contexto — só funcionaria se o Discord colocasse `allow="display-capture"` no
-   iframe, o que não está documentado como concedido.
-2. **WebRTC não é suportado em Activities.** A documentação de networking do Discord diz
-   textualmente *"WebRTC is not supported"* e *"we currently only support websockets"*.
-   Sem P2P, sem SFU, sem STUN/TURN.
+---
 
-A saída é capturar **fora** do sandbox e distribuir por WebSocket:
+## O que você precisa antes
 
-```
-BROADCASTER                          SERVIDOR                  VIEWERS
-Activity (iframe)                                              Activity (iframe)
-  │ clica "Compartilhar"                                              │
-  │ openExternalLink(PUBLIC_ORIGIN/share.html?t=…)                    │
-  ▼                                                                   │
-  aba normal do navegador  ← top-level, permissões completas          │
-  │ getDisplayMedia()  ✅                                             │
-  │ MediaStreamTrackProcessor → VideoEncoder (latencyMode realtime)   │
-  └────── WebSocket binário ──────►  relay                            │
-                                     guarda o decoderConfig           │
-                                     pede keyframe a cada entrada     │
-                                     fan-out ── WS via /.proxy/ ─────►│
-                                                                      │ VideoDecoder → <canvas>
-```
+**1. Node.js** — é o programa que faz tudo isso rodar.
 
-Só o transmissor sai para uma aba. Os espectadores nunca saem do Discord.
+Baixe em [nodejs.org](https://nodejs.org), escolha a versão **LTS** e instale
+clicando em avançar até o fim. Não precisa configurar nada.
 
-**WebCodecs, não MediaRecorder.** A primeira versão usava `MediaRecorder` + MSE e ficava
-em ~3s de atraso. O container impõe um piso: o chunk só sai depois de fechado (timeslice),
-e o MSE precisa acumular buffer para tocar sem engasgar. WebCodecs elimina os dois —
-cada quadro é codificado, enviado e desenhado individualmente, sem container.
+**2. Google Chrome, Edge, Brave ou Opera** — só para quem vai *mostrar* a tela.
+Para *assistir*, qualquer navegador serve.
 
-`WebCodecs` não é gated por Permissions Policy (diferente de `display-capture`), então
-funciona dentro do iframe da Activity.
+> Não funciona no celular para compartilhar. Celular não deixa nenhum site
+> capturar a tela. Assistir pelo celular também costuma falhar.
 
-**Keyframe sob demanda.** Quando alguém entra na sala, o servidor pede um keyframe novo ao
-transmissor em vez de guardar um antigo. A tela aparece em ~1 quadro. O relay também barra
-quadros delta para quem ainda não recebeu keyframe — decoder frio só produz erro.
+---
 
-## Limitações que você está aceitando
+## Testar agora (2 minutos)
 
-| | |
-|---|---|
-| **Áudio** | Não implementado. WebCodecs exige `AudioEncoder`/`AudioDecoder` com sincronia manual via `AudioWorklet` — o container dava isso de graça, WebCodecs não. |
-| **Transmitir do celular** | Impossível. `getDisplayMedia` não existe em navegador mobile. Só desktop. |
-| **Assistir do celular** | Provavelmente não. WebCodecs no WebView do iOS é limitado. |
-| **Navegador** | Chrome/Edge. `MediaStreamTrackProcessor` ainda é só Chromium. O Discord desktop é Chromium, então serve. |
-| **Banda** | ~2 Mbps de egress **por espectador**. 5 pessoas ≈ 10 Mbps, ~4,5 GB/hora. |
-| **UX** | O transmissor passa por um modal "você está saindo do Discord" e precisa manter a aba aberta. |
-| **Transmissores simultâneos** | Um por sala. O segundo é recusado. |
+Serve para ver funcionando antes de mexer com o Discord.
 
-## Configuração
+**1.** Baixe este projeto e descompacte numa pasta.
 
-### 1. Variáveis de ambiente
+**2.** Abra a pasta, clique na barra de endereço do explorador de arquivos,
+digite `cmd` e aperte Enter. Vai abrir uma janela preta — é ali que você digita
+os comandos.
 
-Copie `env.exemplo.txt` para `.env` na raiz e preencha:
+**3.** Digite, um de cada vez, esperando cada um terminar:
 
 ```
-DISCORD_CLIENT_ID=...
-DISCORD_CLIENT_SECRET=...
-PUBLIC_ORIGIN=https://seu-tunel.trycloudflare.com
-SESSION_SECRET=<string longa e aleatória>
-PORT=3001
-NODE_ENV=development
-```
-
-> `PUBLIC_ORIGIN` **nunca** pode ser o domínio `*.discordsays.com`. Se a página de captura
-> abrir dentro do proxy do Discord, ela volta a ser um contexto restrito e `getDisplayMedia`
-> é bloqueado de novo — que é exatamente o problema que esse desenho existe para resolver.
-
-Crie o `VITE_DISCORD_CLIENT_ID` no mesmo `.env` (o Vite lê da raiz):
-
-```
-VITE_DISCORD_CLIENT_ID=<mesmo valor de DISCORD_CLIENT_ID>
-```
-
-### 2. Discord Developer Portal
-
-Em <https://discord.com/developers/applications>, na sua aplicação:
-
-- **OAuth2** → copie Client ID e Client Secret.
-- **Activities → Settings** → ative as Activities.
-- **Activities → URL Mappings** → mapeie a raiz:
-
-  | Prefix | Target |
-  |---|---|
-  | `/` | `seu-tunel.trycloudflare.com` *(sem `https://`)* |
-
-## Rodando
-
-### Sem Discord (desenvolvimento rápido)
-
-O jeito mais rápido de ver funcionando. Não precisa de túnel nem de credenciais.
-
-```bash
 npm install
-npm run dev
+npm run configurar
 ```
 
-Abra `http://localhost:5173/?room=teste` em duas janelas do navegador. Clique em
-**Compartilhar minha tela** numa delas — a outra recebe a transmissão.
+Quando ele perguntar como você quer usar, escolha **1**.
 
-### Com Discord
-
-Um único túnel serve as duas pontas: a Activity (via proxy do Discord) e a página de
-captura (acesso direto ao túnel). Por isso o túnel aponta para a **3001**, não para a 5173
-do Vite — a página de captura precisa estar publicamente acessível fora do proxy.
-
-**A ordem importa**, porque o túnel gera uma URL aleatória e o `VITE_DISCORD_CLIENT_ID`
-é embutido no bundle em tempo de build.
-
-1. **Portal**: crie a app, marque User Install + Guild Install em *Installation*, ative
-   *Activities → Settings → Enable Activities*, e copie Client ID e Client Secret.
-
-   Em *OAuth2 → Redirects*, adicione `https://127.0.0.1`. É só um placeholder — Activities
-   autorizam dentro do próprio cliente e nunca redirecionam — mas sem pelo menos uma
-   redirect cadastrada o `authorize` falha com
-   `invalid_request: Missing "redirect_uri" in request`.
-
-   Depois instale a app num servidor de teste abrindo
-   `https://discord.com/oauth2/authorize?client_id=<SEU_CLIENT_ID>`. Sem instalar, ela não
-   aparece no lançador de atividades.
-
-2. **Túnel** (deixe rodando). Já existe um túnel dedicado com domínio fixo:
-   ```bash
-   cloudflared tunnel --config ~/.cloudflared/discord-screen.yml run discord-screen
-   ```
-   Ele serve `https://tela.suagateway.com.br` → `localhost:3001`. Config isolada de
-   propósito: subir ou derrubar esta sala não encosta em `api.suagateway.com.br` nem no
-   portfólio.
-
-   Sem esse setup, um túnel descartável resolve — mas a URL muda a cada reinício:
-   ```bash
-   cloudflared tunnel --url http://localhost:3001
-   ```
-
-3. **`.env`**: preencha `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`,
-   `VITE_DISCORD_CLIENT_ID` (mesmo valor do Client ID) e `PUBLIC_ORIGIN` com a URL do túnel.
-
-4. **URL Mapping** em *Activities → URL Mappings*:
-
-   | Prefix | Target |
-   |---|---|
-   | `/` | `tela.suagateway.com.br` *(sem `https://`)* |
-
-5. **Build e start** — nesta ordem, senão o Client ID não entra no bundle:
-   ```bash
-   npm run build
-   npm start
-   ```
-
-6. **Discord**: ative o Modo Desenvolvedor (*Configurações → Avançado*), entre num canal de
-   voz do seu servidor de teste e abra a app pelo lançador de atividades.
-
-> A URL do `cloudflared tunnel --url` muda a cada reinício. Quando isso acontecer, atualize
-> `PUBLIC_ORIGIN` e o URL Mapping — mas **não precisa rebuildar**, `PUBLIC_ORIGIN` é lido
-> pelo servidor em tempo de execução. Só reinicie o servidor.
-
-### Testes
-
-```bash
-npm start          # em um terminal
-npm run smoke      # em outro
-```
-
-Valida o relay ponta a ponta sem browser: autenticação por token, entrega do init segment
-para quem entra antes e depois da transmissão, contagem de participantes, recusa de
-transmissor duplicado e isolamento entre salas.
-
-## Diagnóstico embutido
-
-A Activity tem um botão **"Testar captura no iframe"**. Ele tenta `getDisplayMedia()`
-direto de dentro do iframe e mostra o erro exato.
-
-Se um dia o Discord passar a conceder `display-capture` às Activities, esse botão vai
-funcionar — e aí dá para eliminar a aba externa e o modal de saída inteiros, transmitindo
-direto de dentro da Activity. Vale testar de tempos em tempos.
-
-## Estrutura
+**4.** Agora ligue o programa:
 
 ```
-server/
-  index.js          HTTP + WebSocket, troca de OAuth, emissão de tokens
-  rooms.js          relay: salas, init segment, backpressure
-  tokens.js         tokens assinados com HMAC (sem dependência externa)
-  public/share.*    página de captura (roda FORA do iframe)
-client/
-  src/main.js       SDK do Discord, conexão WS, UI da sala
-  src/player.js     MediaSource: remonta os chunks, poda buffer, persegue o vivo
-scripts/smoke.mjs   teste do relay
+npm start
 ```
 
-## Protocolo
+**5.** Abra <http://localhost:3001> no navegador.
 
-Quadros trafegam como binário puro:
+Abra o mesmo endereço numa **segunda janela**. Crie uma sala numa, entre nela
+pela outra, e clique em **Compartilhar tela**. Você vai ver sua própria tela
+chegando do outro lado.
+
+Para desligar, volte na janela preta e aperte `Ctrl + C`.
+
+---
+
+## Usar dentro do Discord
+
+Aqui dá mais trabalho porque o Discord exige que você registre o programa no
+site dele. É uma vez só. Reserve uns 10 minutos.
+
+Dentro do Discord não existe lista de salas: quem abre a atividade cai direto
+na sala daquela call, junto com o resto do pessoal que está lá.
+
+### Passo 1 — Ligue o endereço público
+
+O Discord precisa de um endereço na internet para alcançar o programa que roda
+no seu computador. Isso se resolve sozinho:
 
 ```
-[1B tipo: 1=keyframe 2=delta][8B timestamp do quadro][8B relógio de envio][payload]
+npm run tunel
 ```
 
-O relógio de envio existe só para medir latência. É exato na mesma máquina; entre máquinas
-diferentes o desvio de relógio o torna aproximado — daí o `≈` na interface.
+**Deixe essa janela aberta.** Ela vai mostrar um endereço parecido com
+`https://algo-aleatorio.trycloudflare.com`. Não precisa copiar — o programa já
+guarda sozinho.
 
-Controle vai em JSON: `start`, `config`, `stop` (transmissor → servidor); `state`,
-`stream-start`, `config`, `stream-stop`, `need-keyframe`, `error` (servidor → clientes).
+### Passo 2 — Configure
 
-## Detalhes que não são acidentais
+Abra uma **segunda** janela preta na mesma pasta e rode:
 
-- **`latencyMode: 'realtime'`** no encoder e **`optimizeForLatency: true`** no decoder.
-  Sem eles, ambos acumulam quadros antes de emitir — é compressão melhor, mas é atraso.
-- **`frame.close()`** depois de desenhar. `VideoFrame` segura memória de GPU; sem isso a
-  aba trava em segundos.
-- **Descartar quadro quando `encodeQueueSize > 2`.** Fila no encoder vira latência que
-  nunca mais sai. Melhor perder um quadro do que carregar o atraso pelo resto da sessão.
-- **`track.contentHint = 'text'`.** Diz ao encoder que é tela, não vídeo natural — mantém
-  texto nítido em vez de suavizar bordas.
-- **Reconfigurar o encoder quando o quadro muda de tamanho.** Acontece ao redimensionar a
-  janela compartilhada.
-- **Backpressure no relay.** Se o socket de um viewer acumula mais de 2 MB, o servidor
-  descarta quadros para ele em vez de enfileirar. Sem isso, um espectador com internet ruim
-  derruba o processo por consumo de RAM.
-- **`/.proxy/`** em todo fetch e WebSocket feito de dentro da Activity — é assim que o
-  proxy do Discord roteia para o seu servidor.
+```
+npm run configurar
+```
+
+Escolha a opção **2** e siga o que aparecer na tela. Ele vai pedir dois valores
+do site do Discord e dizer exatamente onde encontrar cada um.
+
+No fim, ele mostra **três coisas para colar no site do Discord**, já preenchidas
+com os seus dados. Faça as três.
+
+### Passo 3 — Ligue
+
+```
+npm start
+```
+
+### Passo 4 — Abra no Discord
+
+Entre num canal de voz do seu servidor, clique no **foguete** 🚀 na barra de
+baixo e escolha a atividade.
+
+---
+
+## Deu errado?
+
+**"Não foi possível entrar" ou a tela fica preta no Discord**
+O endereço do túnel muda toda vez que você fecha e abre o `npm run tunel`.
+Quando isso acontece, vá no site do Discord em **Activities → URL Mappings** e
+troque o *Target* pelo endereço novo (a janela do túnel mostra qual é).
+
+**O botão de compartilhar abre uma aba e não acontece nada**
+Essa aba precisa continuar aberta enquanto você transmite. Pode voltar para o
+Discord normalmente, só não feche a aba.
+
+**"npm não é reconhecido como um comando"**
+O Node.js não foi instalado, ou a janela preta foi aberta antes da instalação.
+Feche a janela, abra de novo e tente outra vez.
+
+**Quero mudar alguma configuração**
+Rode `npm run configurar` de novo. Ele lembra do que você já respondeu — é só
+apertar Enter no que não mudou.
+
+**A "Sala da call" não confere quem está no canal de voz**
+Isso é opcional e só importa se você quer garantir que apenas quem está na call
+consiga entrar. Precisa criar um bot no site do Discord e colar o token dele em
+`DISCORD_BOT_TOKEN`, dentro do arquivo `.env`. Sem isso tudo funciona igual.
+
+---
+
+## Deixar no ar direto (sem seu computador ligado)
+
+Você precisa de uma hospedagem que rode Node.js. Lá dentro:
+
+1. Coloque o projeto e rode `npm install`.
+2. Crie o arquivo `.env` com `npm run configurar`.
+3. Troque, dentro do `.env`:
+   - `NODE_ENV` para `production`
+   - `PUBLIC_ORIGIN` para o endereço do seu site (ex: `https://tela.seusite.com`)
+4. Rode `npm start`.
+
+No site do Discord, troque o *Target* e o *Redirect* pelo endereço do seu site.
+Aí o `npm run tunel` deixa de ser necessário.
+
+---
+
+## Comandos, resumidos
+
+| Comando | Para quê |
+|---|---|
+| `npm install` | Baixa o que o programa precisa. Só na primeira vez. |
+| `npm run configurar` | Faz as perguntas e monta a configuração. |
+| `npm run tunel` | Cria o endereço público para o Discord alcançar você. |
+| `npm start` | Liga o programa. |
+| `npm run smoke` | Confere se está tudo funcionando por dentro. |
+
+---
+
+## Compartilhando com som
+
+Ao clicar em **Compartilhar tela**, marque *Compartilhar o som do computador*.
+
+Depois, na janela que o navegador abre para escolher a tela, marque também a
+caixinha de **áudio** que aparece lá embaixo. São duas marcações: a primeira diz
+que você quer som, a segunda é o navegador pedindo permissão. Sem a segunda, ele
+entrega a tela em silêncio.
+
+Quem assiste tem um botão de alto-falante na barra de baixo para silenciar.
+
+> Som funciona no Chrome, Edge, Brave e Opera. No Windows dá para pegar o som do
+> computador inteiro; no Mac, só o som de uma aba do navegador — é limitação do
+> sistema, não do programa.
+
+---
+
+## O que ainda não dá
+
+- **Compartilhar do celular.** Nenhum navegador de celular permite.
+- **Muita gente ao mesmo tempo.** Cada pessoa assistindo consome uns 2 Mb/s da
+  sua internet. Cinco pessoas já são 10 Mb/s.
+- **Mais de 4 telas ao mesmo tempo** na mesma sala.
+
+Se você mexe em código e quer entender as decisões por trás disso,
+veja [docs/como-funciona.md](docs/como-funciona.md).

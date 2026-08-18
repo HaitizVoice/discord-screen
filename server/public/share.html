@@ -8,7 +8,7 @@
          dos cabeçalhos no-store guardou a versão antiga por heurística do
          navegador, e continuaria usando ela para sempre. Trocar a query força
          uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=5" />
+    <link rel="stylesheet" href="/share.css?v=6" />
   </head>
   <body>
     <main class="card">
@@ -37,7 +37,15 @@
 
         <p id="presetLine" class="preset" hidden></p>
 
-        <p class="note">Esta versão transmite apenas vídeo — o áudio vem depois.</p>
+        <label class="check">
+          <input id="withAudio" type="checkbox" />
+          <span>Compartilhar o som do computador</span>
+        </label>
+
+        <p class="note">
+          Marque também "Compartilhar o áudio" na janela que o navegador abrir — sem isso
+          ele entrega a tela sem som.
+        </p>
 
         <button id="start" class="primary">Escolher tela e transmitir</button>
       </section>
@@ -61,6 +69,6 @@
       </footer>
     </main>
 
-    <script type="module" src="/share.js?v=6"></script>
+    <script type="module" src="/share.js?v=7"></script>
   </body>
 </html>

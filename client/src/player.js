@@ -15,13 +15,17 @@
  * imagem durante o redimensionamento.
  */
 
-export function createPlayer(canvas, { onError } = {}) {
+export function createPlayer(canvas, { onError, onFirstFrame } = {}) {
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 
   let decoder = null;
   let needKeyframe = true;
   let lastLagMs = 0;
   let framesDrawn = 0;
+  // Quem espera precisa saber quando a espera acabou: entre pedir para assistir
+  // e o primeiro quadro cabe um keyframe inteiro de atraso, e o canvas preto
+  // desse intervalo é idêntico a um travamento.
+  let virgem = true;
 
   function start(rawConfig) {
     stop();
@@ -97,6 +101,11 @@ export function createPlayer(canvas, { onError } = {}) {
     // VideoFrame segura memória de GPU; sem close() a aba trava em segundos.
     frame.close();
     framesDrawn++;
+
+    if (virgem) {
+      virgem = false;
+      onFirstFrame?.();
+    }
   }
 
   function stop() {

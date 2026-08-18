@@ -1,3 +1,5 @@
+![Como não compartilhar tela no Discord](como-nao-compartilhar-tela-no-discord-banner.png)
+
 # Sala de Tela
 
 Mostre sua tela para quem está na mesma call do Discord.

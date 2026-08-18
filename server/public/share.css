@@ -207,6 +207,16 @@ video {
 }
 
 /* Aviso nao e erro: o som foi descartado, mas a tela continua no ar. */
+.secondary {
+  margin-bottom: 10px;
+  background: #3a3d44;
+  color: #f2f3f5;
+}
+
+.secondary:hover {
+  background: #474b53;
+}
+
 .status.aviso {
   color: #f0b232;
 }

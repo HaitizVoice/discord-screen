@@ -733,6 +733,27 @@ button {
   color: #111214;
 }
 
+/* Algo pedido não pôde ser feito e a solução está atrás deste botão. Pulsa em
+   vez de gritar: é um convite a clicar, não um erro. */
+.btn.atencao {
+  background: #f0b232;
+  color: #111214;
+}
+
+.btn.atencao:hover:not(:disabled) {
+  background: #d9a02c;
+}
+
+@keyframes chamar {
+  50% {
+    box-shadow: 0 0 0 5px rgba(240, 178, 50, 0.28);
+  }
+}
+
+.btn.atencao {
+  animation: chamar 1.8s ease-in-out infinite;
+}
+
 /* Sair fica vermelho e por último, como o encerrar chamada do Discord. */
 .btn.leave {
   background: var(--danger);

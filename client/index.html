@@ -236,12 +236,17 @@
           <label class="field-check">
             <input id="mAudio" type="checkbox" />
             <span>
-              Compartilhar o som do computador
-              <em class="opt">marque também "Compartilhar o áudio" na janela do navegador</em>
+              Compartilhar o som
+              <em class="opt">
+                O som só vem de uma <strong>aba do navegador</strong> — escolha uma aba na
+                janela seguinte e marque "Compartilhar o áudio da guia". Tela inteira
+                carregaria o som do Discord junto, e a call se ouviria em eco.
+              </em>
             </span>
           </label>
 
           <button id="modalSwap" class="panel-btn" hidden>Trocar a tela compartilhada</button>
+          <button id="modalSom" class="panel-btn" hidden>Som de uma aba</button>
 
           <p id="modalNote" class="modal-note">
             Se o Discord não permitir capturar aqui dentro, a escolha da tela abre numa aba do

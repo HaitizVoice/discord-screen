@@ -225,21 +225,42 @@ async function inVoiceChannel(guildId, channelId, userId) {
 const AVATAR_ID = /^[0-9]{15,21}$/;
 const AVATAR_HASH = /^(a_)?[0-9a-f]{32}$/;
 
+// Cache em memória: o hash muda quando a pessoa troca a foto, então a chave
+// nunca fica velha. Sem ele, montar a grade numa sala cheia vira uma ida ao
+// CDN do Discord por avatar, e a espera aparece como a sala demorando a abrir.
+// Teto pequeno de propósito — são poucos KB por imagem e uma sala tem dezenas
+// de pessoas, não milhares.
+const AVATAR_CACHE = new Map();
+const AVATAR_CACHE_MAX = 200;
+
 app.get('/api/avatar/:id/:hash', async (req, res) => {
   const { id, hash } = req.params;
   if (!AVATAR_ID.test(id) || !AVATAR_HASH.test(hash)) return res.status(400).end();
 
+  // Tipo fixo, não o que o upstream disser: pedimos .png e é png que sai.
+  res.setHeader('Content-Type', 'image/png');
+  // O hash muda quando a pessoa troca a foto, então a URL é imutável.
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+
+  const chave = `${id}/${hash}`;
+  const guardado = AVATAR_CACHE.get(chave);
+  if (guardado) return res.end(guardado);
+
   try {
-    const upstream = await fetch(
-      `https://cdn.discordapp.com/avatars/${id}/${hash}.png?size=128`
-    );
+    const upstream = await fetch(`https://cdn.discordapp.com/avatars/${id}/${hash}.png?size=128`, {
+      // O CDN fora do ar não pode virar uma sala que não abre.
+      signal: AbortSignal.timeout(5000),
+    });
     if (!upstream.ok) return res.status(404).end();
 
-    // Tipo fixo, não o que o upstream disser: pedimos .png e é png que sai.
-    res.setHeader('Content-Type', 'image/png');
-    // O hash muda quando a pessoa troca a foto, então a URL é imutável.
-    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
-    res.end(Buffer.from(await upstream.arrayBuffer()));
+    const imagem = Buffer.from(await upstream.arrayBuffer());
+    // Descarta o mais antigo primeiro; a ordem de inserção do Map basta.
+    if (AVATAR_CACHE.size >= AVATAR_CACHE_MAX) {
+      AVATAR_CACHE.delete(AVATAR_CACHE.keys().next().value);
+    }
+    AVATAR_CACHE.set(chave, imagem);
+
+    res.end(imagem);
   } catch {
     res.status(502).end();
   }

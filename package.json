@@ -1,0 +1,19 @@
+{
+  "name": "discord-screen",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,client -c blue,magenta \"npm -w server run dev\" \"npm -w client run dev\"",
+    "build": "npm -w client run build",
+    "start": "npm -w server run start",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

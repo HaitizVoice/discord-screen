@@ -255,12 +255,18 @@ function toViewers(room, obj) {
 
 // -------------------------------------------------------------------- estado
 
+// O avatar vai junto do nome: a lista de quem assiste mostra as fotos, e sem
+// isto sobrava só a inicial colorida para quem tem foto no Discord.
 function watchersOf(room, slot) {
   const byId = new Map();
   for (const v of room.viewers) {
-    if (v.__watching?.has(slot) && v.__info) byId.set(v.__info.id, v.__info.name);
+    if (v.__watching?.has(slot) && v.__info) byId.set(v.__info.id, v.__info);
   }
-  return [...byId].map(([id, name]) => ({ id, name }));
+  return [...byId.values()].map((info) => ({
+    id: info.id,
+    name: info.name,
+    avatar: info.avatar ?? null,
+  }));
 }
 
 function roomState(room) {

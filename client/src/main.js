@@ -267,9 +267,7 @@ function buildSidebar(casters) {
     for (const p of outras) barra.append(buildTile(p).el);
   }
 
-  barra.append(
-    secaoTitulo(participants.length === 1 ? '1 pessoa' : `${participants.length} pessoas`)
-  );
+  barra.append(contagemPessoas());
 
   // semVideo é obrigatório aqui: o canvas de cada transmissão é um nó de DOM
   // só, e anexá-lo neste tile o arrancaria do palco — que ficaria preto
@@ -287,6 +285,25 @@ function secaoTitulo(texto) {
   t.className = 'sidebar-title';
   t.textContent = texto;
   return t;
+}
+
+/**
+ * Quantas pessoas na sala, na mesma pílula usada no resto da interface.
+ *
+ * Era um título em caixa alta, que gastava uma faixa inteira da lateral para
+ * dizer o que um número diz — e a lateral é justamente onde falta espaço.
+ */
+function contagemPessoas() {
+  const chip = document.createElement('div');
+  chip.className = 'sidebar-count';
+  chip.innerHTML =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 20v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>' +
+    '<circle cx="9" cy="7" r="4"/><path d="M23 20v-2a4 4 0 0 0-3-3.87"/>' +
+    '<path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+  chip.append(document.createTextNode(String(participants.length)));
+  chip.title =
+    participants.length === 1 ? '1 pessoa na sala' : `${participants.length} pessoas na sala`;
+  return chip;
 }
 
 /**
@@ -412,7 +429,9 @@ function buildWatchers(slot) {
     for (const w of people) {
       const row = document.createElement('span');
       row.className = 'hover-row';
-      row.textContent = w.name;
+      row.append(buildAvatar(w));
+      // textContent, nunca innerHTML: o nome vem do Discord, é conteúdo de terceiro.
+      row.append(document.createTextNode(w.name));
       list.append(row);
     }
   }

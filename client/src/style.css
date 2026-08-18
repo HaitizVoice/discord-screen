@@ -129,6 +129,39 @@ body {
   margin-top: 0;
 }
 
+/* Contagem de pessoas: pílula, não título. Fundo em --tile e não o preto
+   translúcido das outras pílulas — aqui atrás não há vídeo, é o fundo preto da
+   página, e um preto sobre outro não apareceria. */
+.sidebar-count {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--tile);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: default;
+}
+
+.sidebar-count:first-child {
+  margin-top: 0;
+}
+
+.sidebar-count svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+
 /* Proporção fixa aqui, ao contrário da grade: a barra tem largura definida e
    altura livre, então a miniatura precisa de uma altura própria para existir. */
 .sidebar .tile {
@@ -153,16 +186,13 @@ body {
   padding: 8px;
 }
 
-/* Pessoas em quadros, como na call: o mesmo tile da grade, em duas colunas.
-   Duas porque uma só desperdiça a largura e três deixam o avatar pequeno
-   demais para reconhecer alguém de relance. */
+/* Pessoas em quadros, como na call: o mesmo tile da grade, um por linha.
+   Uma coluna só porque o quadro maior mostra a foto no tamanho em que ela
+   ainda serve para reconhecer alguém — que é a razão de o quadro existir. */
 .sidebar-people {
   flex: 0 0 auto;
   display: grid;
-  /* auto-fill e não um número fixo de colunas: a lateral é redimensionável, e
-     duas colunas fixas espremiam o avatar até ninguém se reconhecer quando ela
-     está estreita. Assim vira uma coluna sozinha quando precisa. */
-  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -453,6 +483,16 @@ body {
   height: 7px;
   border-radius: 50%;
   background: var(--live);
+}
+
+/* A foto na lista: o .avatar da grade é dimensionado em % do quadro, e aqui
+   não há quadro — sem tamanho próprio ele herdaria o mínimo de 48px do clamp e
+   empurraria a linha inteira. */
+.hover-row .avatar {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  font-size: 9px;
 }
 
 .hover-empty {

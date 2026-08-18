@@ -11,32 +11,42 @@
  *   de esquecer, e com o sintoma mais enganoso de todos — tudo abre normalmente
  *   e só o botão de compartilhar leva a uma aba morta.
  *
- * O binário vem por npx, sob demanda. É o que evita "instale o cloudflared"
- * como pré-requisito, que é onde muita gente para.
+ * O binário é resolvido por ./cloudflared.mjs, que baixa o release oficial se
+ * ainda não houver nenhum. Ninguém precisa instalar nada antes.
  */
 import { spawn } from 'node:child_process';
 
 import { lerEnv, gravarEnv, cor } from './env.mjs';
+import { garantirCloudflared } from './cloudflared.mjs';
 
 const env = lerEnv();
 const PORTA = env.PORT || '3001';
 const CONFIG = env.TUNEL_CONFIG || '';
 const ENDERECO = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/;
 
+// --no-autoupdate: o cloudflared se atualiza sozinho e reinicia no meio do
+// caminho, derrubando o túnel sem explicação. Quem manda na versão aqui é o
+// ./cloudflared.mjs.
 const args = CONFIG
-  ? ['-y', 'cloudflared', '--config', CONFIG, 'tunnel', 'run']
-  : ['-y', 'cloudflared', 'tunnel', '--url', `http://localhost:${PORTA}`];
+  ? ['--config', CONFIG, 'tunnel', '--no-autoupdate', 'run']
+  : ['tunnel', '--no-autoupdate', '--url', `http://localhost:${PORTA}`];
+
+let cloudflared;
+try {
+  cloudflared = await garantirCloudflared();
+} catch (err) {
+  console.log(`\n${cor.vermelho}  ${err.message}${cor.fim}\n`);
+  process.exit(1);
+}
 
 console.log(`\n${cor.fraco}  Abrindo o túnel para localhost:${PORTA}…${cor.fim}`);
 if (CONFIG) {
   console.log(`${cor.verde}  ${env.PUBLIC_ORIGIN || '(endereço definido no config do túnel)'}${cor.fim}`);
-} else {
-  console.log(`${cor.fraco}  Na primeira vez isso baixa o cloudflared e demora um pouco.${cor.fim}`);
 }
 console.log(`${cor.fraco}  Deixe esta janela aberta enquanto estiver usando.${cor.fim}\n`);
 
-// shell: true porque no Windows o npx é um .cmd, que não é executável direto.
-const tunel = spawn('npx', args, { shell: true });
+// Sem shell: o caminho do binário vem resolvido, então não há .cmd no meio.
+const tunel = spawn(cloudflared, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
 let achado = null;
 
@@ -64,6 +74,11 @@ function observar(pedaco) {
 
 tunel.stdout.on('data', observar);
 tunel.stderr.on('data', observar);
+
+tunel.on('error', (err) => {
+  console.log(`\n${cor.vermelho}  Não consegui executar o cloudflared: ${err.message}${cor.fim}\n`);
+  process.exit(1);
+});
 
 tunel.on('close', (codigo) => {
   if (!CONFIG && !achado) {

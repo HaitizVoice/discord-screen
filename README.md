@@ -81,6 +81,10 @@ npm run tunel
 `https://algo-aleatorio.trycloudflare.com`. Não precisa copiar — o programa já
 guarda sozinho.
 
+Na primeira vez ele baixa o `cloudflared` (uns 50 MB) e guarda em `.cache/`
+dentro da pasta do projeto. Você não precisa instalar nada, e se já tiver o
+cloudflared na máquina ele usa o seu.
+
 ### Passo 2 — Configure
 
 Abra uma **segunda** janela preta na mesma pasta e rode:

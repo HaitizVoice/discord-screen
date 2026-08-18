@@ -43,8 +43,12 @@ app.use(express.json());
 // Página de captura (broadcaster). Servida como página normal, fora do proxy.
 // Nomes fixos (share.html/js/css), então nunca cachear: senão uma correção
 // fica presa no navegador de quem transmite, sem jeito óbvio de perceber.
+// extensions: o portal do Discord pede as URLs de termos e privacidade, e
+// "/termos" se lê melhor do que "/termos.html" — sem isto o catch-all lá
+// embaixo devolveria a Activity para esses dois caminhos.
 app.use(
   express.static(path.join(__dirname, 'public'), {
+    extensions: ['html'],
     setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
   })
 );

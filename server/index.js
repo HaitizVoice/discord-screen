@@ -17,10 +17,15 @@ const {
   DISCORD_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
   DISCORD_BOT_TOKEN,
-  PUBLIC_ORIGIN = 'http://localhost:3001',
+  PUBLIC_ORIGIN: ORIGEM_CRUA = 'http://localhost:3001',
   PORT = 3001,
   NODE_ENV = 'development',
 } = process.env;
+
+// Uma barra sobrando no fim se propaga: o shareUrl vira "//share.html" e o
+// redirect do OAuth vira "//auth/callback", que não bate com o endereço
+// cadastrado no portal. O login falha sem explicar nada.
+const PUBLIC_ORIGIN = ORIGEM_CRUA.replace(/[/]+$/, '');
 
 const isProd = NODE_ENV === 'production';
 
@@ -57,8 +62,22 @@ app.use(
 
 /** Troca o code do OAuth pelo access_token. O secret nunca sai do servidor. */
 app.post('/api/token', async (req, res) => {
-  const { code } = req.body ?? {};
+  const { code, client_id } = req.body ?? {};
   if (!code) return res.status(400).json({ error: 'code obrigatorio' });
+
+  // A metade que autoriza é a aplicação que abriu a atividade; a metade que
+  // troca o código é este servidor. Se forem aplicações diferentes, o Discord
+  // recusa — e o erro dele não diz qual das duas está errada.
+  if (client_id && DISCORD_CLIENT_ID && client_id !== DISCORD_CLIENT_ID) {
+    console.error(
+      `[oauth] atividade e da aplicacao ${client_id}, mas o .env tem ${DISCORD_CLIENT_ID}`
+    );
+    return res.status(409).json({
+      error:
+        `Esta atividade é da aplicação ${client_id}, mas o servidor está configurado ` +
+        `com a ${DISCORD_CLIENT_ID}. As duas precisam ser a mesma.`,
+    });
+  }
 
   // Sem credencial não há troca possível, e o erro que o Discord devolve nesse
   // caso não deixa isso óbvio para ninguém. Dizer aqui poupa a caçada.
@@ -225,21 +244,42 @@ async function inVoiceChannel(guildId, channelId, userId) {
 const AVATAR_ID = /^[0-9]{15,21}$/;
 const AVATAR_HASH = /^(a_)?[0-9a-f]{32}$/;
 
+// Cache em memória: o hash muda quando a pessoa troca a foto, então a chave
+// nunca fica velha. Sem ele, montar a grade numa sala cheia vira uma ida ao
+// CDN do Discord por avatar, e a espera aparece como a sala demorando a abrir.
+// Teto pequeno de propósito — são poucos KB por imagem e uma sala tem dezenas
+// de pessoas, não milhares.
+const AVATAR_CACHE = new Map();
+const AVATAR_CACHE_MAX = 200;
+
 app.get('/api/avatar/:id/:hash', async (req, res) => {
   const { id, hash } = req.params;
   if (!AVATAR_ID.test(id) || !AVATAR_HASH.test(hash)) return res.status(400).end();
 
+  // Tipo fixo, não o que o upstream disser: pedimos .png e é png que sai.
+  res.setHeader('Content-Type', 'image/png');
+  // O hash muda quando a pessoa troca a foto, então a URL é imutável.
+  res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+
+  const chave = `${id}/${hash}`;
+  const guardado = AVATAR_CACHE.get(chave);
+  if (guardado) return res.end(guardado);
+
   try {
-    const upstream = await fetch(
-      `https://cdn.discordapp.com/avatars/${id}/${hash}.png?size=128`
-    );
+    const upstream = await fetch(`https://cdn.discordapp.com/avatars/${id}/${hash}.png?size=128`, {
+      // O CDN fora do ar não pode virar uma sala que não abre.
+      signal: AbortSignal.timeout(5000),
+    });
     if (!upstream.ok) return res.status(404).end();
 
-    // Tipo fixo, não o que o upstream disser: pedimos .png e é png que sai.
-    res.setHeader('Content-Type', 'image/png');
-    // O hash muda quando a pessoa troca a foto, então a URL é imutável.
-    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
-    res.end(Buffer.from(await upstream.arrayBuffer()));
+    const imagem = Buffer.from(await upstream.arrayBuffer());
+    // Descarta o mais antigo primeiro; a ordem de inserção do Map basta.
+    if (AVATAR_CACHE.size >= AVATAR_CACHE_MAX) {
+      AVATAR_CACHE.delete(AVATAR_CACHE.keys().next().value);
+    }
+    AVATAR_CACHE.set(chave, imagem);
+
+    res.end(imagem);
   } catch {
     res.status(502).end();
   }
@@ -645,6 +685,58 @@ wss.on('connection', (ws) => {
 
 wss.on('close', () => clearInterval(heartbeat));
 
+// Porta ocupada e o tropeco mais comum aqui: basta um "npm start" esquecido
+// numa janela. Sem isto, o Node cospe um stack trace de vinte linhas que nao
+// diz nem qual e o problema nem o que fazer.
+server.on('error', (err) => {
+  if (err.code !== 'EADDRINUSE') throw err;
+
+  console.error('');
+  console.error(`  A porta ${PORT} já está sendo usada.`);
+  console.error('  Quase sempre é outra janela deste mesmo programa aberta.');
+  console.error('  Feche a outra janela e tente de novo.');
+  console.error('');
+  console.error('  Se precisar rodar os dois, mude PORT no arquivo .env.');
+  console.error('');
+  process.exit(1);
+});
+
+/** Data da modificação mais recente dentro de um caminho. */
+function maisRecente(alvo) {
+  const s = fs.statSync(alvo);
+  if (!s.isDirectory()) return s.mtimeMs;
+  return fs
+    .readdirSync(alvo)
+    .reduce((maior, nome) => Math.max(maior, maisRecente(path.join(alvo, nome))), 0);
+}
+
+/**
+ * Avisa quando o que está no ar foi montado antes da última mudança no código.
+ *
+ * Quem roda "npm run dev" vê as mudanças no localhost:5173, mas o Discord entra
+ * por esta porta — que serve o último build. A mudança parece não ter
+ * acontecido, e não há nada na tela que explique por quê.
+ */
+function avisarBuildVelho() {
+  const raiz = path.join(__dirname, '..');
+  try {
+    const build = fs.statSync(path.join(clientDist, 'index.html')).mtimeMs;
+    const fonte = Math.max(
+      maisRecente(path.join(raiz, 'client', 'src')),
+      maisRecente(path.join(raiz, 'client', 'index.html')),
+      maisRecente(path.join(raiz, 'shared'))
+    );
+    if (fonte <= build) return;
+
+    console.log('');
+    console.log('  Aviso: o site no ar foi montado antes da sua última mudança no código.');
+    console.log('  Pelo Discord as pessoas ainda veem a versão antiga.');
+    console.log('  Rode "npm start" para montar de novo — "npm run dev" atualiza só o 5173.');
+  } catch {
+    // Ainda sem build; o proprio arranque ja diz o que fazer.
+  }
+}
+
 server.listen(PORT, () => {
   const local = `http://localhost:${PORT}`;
 
@@ -654,7 +746,9 @@ server.listen(PORT, () => {
   console.log('');
 
   if (DISCORD_CLIENT_ID) {
-    console.log(`  Discord: ligado · endereço público ${PUBLIC_ORIGIN}`);
+    console.log(`  Discord: ligado · aplicação ${DISCORD_CLIENT_ID}`);
+    console.log(`  Endereço público: ${PUBLIC_ORIGIN}`);
+    console.log(`  Redirect que precisa estar no portal: ${PUBLIC_ORIGIN}/auth/callback`);
   } else {
     console.log('  Discord: desligado (só navegador).');
     console.log('  Para usar dentro do Discord, rode: npm run configurar');
@@ -669,6 +763,8 @@ server.listen(PORT, () => {
     console.error('  A tela de captura precisa abrir fora do Discord, senão a');
     console.error('  captura é bloqueada. Rode: npm run tunel');
   }
+
+  avisarBuildVelho();
 
   if (DISCORD_CLIENT_ID && PUBLIC_ORIGIN.startsWith('http://localhost')) {
     console.log('');

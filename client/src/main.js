@@ -222,6 +222,11 @@ function renderGrid() {
   grid.classList.toggle('palco', noPalco);
   grid.classList.toggle('cheia', noPalco && telaCheia);
 
+  // Com a lateral no ar, a contagem no topo repete o que está logo ali — e
+  // custa uma faixa inteira de altura, que é o que falta para a tela. Vazia, a
+  // barra de cima se recolhe sozinha.
+  $('people').hidden = noPalco && !telaCheia;
+
   // Os canvas são reanexados abaixo; removê-los daqui não perde o conteúdo.
   grid.replaceChildren();
 
@@ -266,10 +271,12 @@ function buildSidebar(casters) {
     secaoTitulo(participants.length === 1 ? '1 pessoa' : `${participants.length} pessoas`)
   );
 
-  // Duas colunas: o mesmo quadro da grade, no tamanho que a lateral comporta.
+  // semVideo é obrigatório aqui: o canvas de cada transmissão é um nó de DOM
+  // só, e anexá-lo neste tile o arrancaria do palco — que ficaria preto
+  // enquanto a miniatura ao lado mostrava a tela.
   const gente = document.createElement('div');
   gente.className = 'sidebar-people';
-  for (const p of participants) gente.append(buildTile(p).el);
+  for (const p of participants) gente.append(buildTile(p, { semVideo: true }).el);
   barra.append(gente);
 
   return barra;
@@ -287,9 +294,13 @@ function secaoTitulo(texto) {
  *
  * `palco` distingue o tile em destaque dos da lateral, e é o que decide o que o
  * clique faz: no palco, alterna tela cheia; na lateral, promove aquela tela.
+ *
+ * `semVideo` força o avatar mesmo para quem está transmitindo. É o que permite
+ * a mesma pessoa aparecer no palco e na lista de pessoas sem que os dois
+ * disputem o único canvas daquela transmissão.
  */
-function buildTile(p, { palco = false } = {}) {
-  const slot = p.broadcasting ? slotOf(p.id) : null;
+function buildTile(p, { palco = false, semVideo = false } = {}) {
+  const slot = p.broadcasting && !semVideo ? slotOf(p.id) : null;
   const stream = slot !== null ? streams.get(slot) : null;
   const isMe = p.id === session?.user?.id;
 
@@ -740,13 +751,24 @@ boot().catch((err) => {
 });
 
 async function boot() {
-  const config = await loadConfig();
-  clientId = config.clientId ?? null;
-  checkVersion(config.asset);
+  // O painel inicial é estático. Sem este vigia, qualquer espera que não
+  // termine fica com a cara de "Conectando…" para sempre, sem dizer o que
+  // está faltando — que foi exatamente como este arranque ja travou.
+  const vigia = setTimeout(() => {
+    setEmpty('Está demorando…', 'Sem resposta do servidor. Ele está no ar?');
+  }, 8000);
+
+  // Buscada em paralelo, nunca antes: ela traz o diagnóstico de versão e o
+  // client id de reserva, e nenhum dos dois vale segurar o login.
+  const config = loadConfig();
 
   // Sem login o lobby ainda abre: dá para ver as salas antes de entrar. Só
   // criar e entrar é que pedem identidade.
-  session = inDiscord ? await authDiscord(clientId) : await authWeb();
+  session = inDiscord ? await authDiscord(config) : await authWeb();
+
+  clientId = params.get('client_id') || (await config).clientId || null;
+  checkVersion((await config).asset);
+  clearTimeout(vigia);
 
   renderProfileButton();
 
@@ -1115,7 +1137,13 @@ $('leaveRoom').addEventListener('click', () => showLobby());
 /** Client id e versão do bundle, decididos pelo servidor. */
 async function loadConfig() {
   try {
-    return await fetch(`${P}/api/config`, { cache: 'no-store' }).then((r) => r.json());
+    const r = await fetch(`${P}/api/config`, {
+      cache: 'no-store',
+      // fetch não expira sozinho. Sem prazo, um pedido que trava segura tudo o
+      // que vem depois — e nada aqui vale prender o arranque.
+      signal: AbortSignal.timeout(6000),
+    });
+    return await r.json();
   } catch {
     // Nem o id nem o diagnóstico podem impedir a sala de abrir.
     return {};
@@ -1151,11 +1179,23 @@ function checkVersion(asset) {
   location.reload();
 }
 
-async function authDiscord(clientId) {
-  if (!clientId) {
+/**
+ * @param {Promise<{clientId?:string}>|string} fonteDoId promessa da config, ou
+ * o id direto quando já se sabe qual é (o caminho da renovação de sessão).
+ */
+async function authDiscord(fonteDoId) {
+  // O Discord injeta client_id na URL do iframe. Preferir essa via tira o login
+  // da dependência de uma ida ao servidor: quando ela demorava, a atividade
+  // ficava parada sem nada para mostrar. A config entra só como reserva.
+  const id =
+    params.get('client_id') ||
+    (typeof fonteDoId === 'string' ? fonteDoId : (await fonteDoId)?.clientId);
+
+  if (!id) {
     throw new Error('O servidor está sem as credenciais do Discord. Rode: npm run configurar');
   }
 
+  const clientId = id;
   sdk = new DiscordSDK(clientId);
   await sdk.ready();
 
@@ -1168,7 +1208,7 @@ async function authDiscord(clientId) {
     scope: ['identify'],
   });
 
-  const { access_token } = await post(`${P}/api/token`, { code });
+  const { access_token } = await post(`${P}/api/token`, { code, client_id: clientId });
   await sdk.commands.authenticate({ access_token });
 
   // guild/channel vão junto para o servidor poder confirmar, pelo Discord, que
@@ -1207,11 +1247,23 @@ async function renovarIdentidade() {
  * um 401 ali significa que renovar não resolve, e insistir viraria laço.
  */
 async function post(url, body, { retry = true } = {}) {
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      // Um pedido pendurado é pior que um pedido que falha: o que falha diz
+      // alguma coisa, o pendurado só deixa a tela parada.
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    const msg =
+      err.name === 'TimeoutError'
+        ? 'O servidor não respondeu a tempo.'
+        : 'Não foi possível falar com o servidor.';
+    throw Object.assign(new Error(msg), { status: 0 });
+  }
 
   const data = await r.json().catch(() => ({}));
 

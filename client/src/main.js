@@ -759,6 +759,12 @@ function ensureStatsTimer() {
     $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
     $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
     $('pRes').textContent = s.player.getSizes().video;
+
+    // Quatro estados diferentes que, sem isto, parecem todos "sem som".
+    if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
+    else if (!s.audio.temSom()) $('pSom').textContent = 'aguardando o áudio…';
+    else if (volume === 0) $('pSom').textContent = 'silenciado aqui';
+    else $('pSom').textContent = `tocando · ${Math.round(volume * 100)}%`;
   }, 1000);
 }
 
@@ -1574,7 +1580,7 @@ async function broadcastFromHere() {
     bitrate: Number($('mQuality').value),
     fps: Number($('mFps').value),
     audio: $('mAudio').checked,
-    onAviso: (m) => toast(m),
+    onAviso: (m) => toast(m, true),
     onEnd: () => {
       myBroadcast = null;
       renderBar();

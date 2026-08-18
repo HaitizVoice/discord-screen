@@ -170,7 +170,7 @@ export function createBroadcaster({
     pump(track);
     // Pedir áudio não garante receber: em vários sistemas a caixa "compartilhar
     // o som" fica desmarcada, e o navegador devolve a tela sem faixa de som.
-    const audioTrack = somPermitido(track, stream);
+    const audioTrack = prepararSom(track, stream);
     if (audioTrack) pumpAudio(audioTrack);
 
     return stream;
@@ -199,32 +199,34 @@ export function createBroadcaster({
     return c;
   }
 
-  /**
-   * Devolve a faixa de som, ou null quando transmiti-la faria a call se ouvir.
+/**
+   * Devolve a faixa de som capturada, avisando quando ela traz risco de eco.
    *
    * Nenhum navegador consegue tirar um aplicativo específico da captura: o som
-   * é capturado por processo, na mistura do sistema, e é tudo ou nada. O que dá
-   * para saber é o que a pessoa escolheu compartilhar — e isso basta.
+   * vem misturado, por processo, e é tudo ou nada. Compartilhando uma aba, o som
+   * sai só dali e a voz do Discord nunca entra. Compartilhando tela inteira, vem
+   * a mistura do sistema — com o Discord dentro — e a call pode se ouvir de
+   * volta.
    *
-   * Aba: o som sai só daquela aba, então a voz do Discord nunca entra. Tela
-   * inteira ou janela: vem a mistura do sistema, com o Discord dentro, e todo
-   * mundo na call passa a ouvir a própria voz de volta. Nesse caso a faixa é
-   * descartada aqui mesmo, antes de sair da máquina.
+   * Esta função já descartou a faixa nesse segundo caso. Era proteção demais:
+   * matava o som justamente no uso mais comum (jogo ou vídeo em tela cheia), e
+   * quem tinha pedido som explicitamente ficava sem, sem entender por quê. A
+   * escolha é de quem transmite; o que falta é ela ser informada. Quem assiste
+   * ainda tem o controle de volume para se defender.
    */
-  function somPermitido(videoTrack, capturado) {
+  function prepararSom(videoTrack, capturado) {
     const faixa = capturado.getAudioTracks()[0];
     if (!faixa) return null;
 
     const superficie = videoTrack.getSettings?.().displaySurface;
-    if (superficie === 'browser') return faixa;
+    if (superficie !== 'browser') {
+      onAviso?.(
+        'Atenção: compartilhando a tela inteira, o som do Discord vai junto e a ' +
+          'call pode se ouvir. Para só o som do conteúdo, compartilhe uma aba do navegador.'
+      );
+    }
 
-    faixa.stop();
-    capturado.removeTrack(faixa);
-    onAviso?.(
-      'Transmitindo sem som: na tela inteira o som do Discord entraria junto e ' +
-        'todo mundo se ouviria. Para transmitir com som, compartilhe uma aba do navegador.'
-    );
-    return null;
+    return faixa;
   }
 
   // -------------------------------------------------------------------- áudio
@@ -610,7 +612,7 @@ export function createBroadcaster({
     // A tela nova traz a própria faixa de som; a antiga morreu com o stream.
     await audioReader?.cancel().catch(() => {});
     audioReader = null;
-    const novoAudio = somPermitido(track, fresh);
+    const novoAudio = prepararSom(track, fresh);
     if (novoAudio && audioEncoder) pumpAudio(novoAudio);
 
     return fresh;

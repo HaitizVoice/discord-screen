@@ -1,13 +1,37 @@
 import crypto from 'node:crypto';
 
-const SECRET = process.env.SESSION_SECRET || 'dev-inseguro-troque-isto';
+/**
+ * Segredo lido na hora do uso, nunca na importação.
+ *
+ * Este módulo é importado por index.js, e imports são avaliados antes do corpo
+ * de quem importa — ou seja, antes de `dotenv.config()`. Lendo o segredo aqui
+ * em cima, o valor do .env nunca chegava: tudo era assinado com o padrão de
+ * desenvolvimento, que está publicado neste repositório. Qualquer pessoa
+ * poderia forjar um token de sala.
+ */
+let cached = null;
+
+function secret() {
+  if (cached) return cached;
+
+  cached = process.env.SESSION_SECRET;
+  if (!cached) {
+    // Em produção não existe padrão aceitável: sem segredo, não há assinatura.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('SESSION_SECRET obrigatorio em producao.');
+    }
+    console.warn('aviso: SESSION_SECRET ausente — assinando com segredo de desenvolvimento.');
+    cached = 'dev-inseguro-troque-isto';
+  }
+  return cached;
+}
 
 function b64url(buf) {
   return Buffer.from(buf).toString('base64url');
 }
 
 function hmac(data) {
-  return crypto.createHmac('sha256', SECRET).update(data).digest('base64url');
+  return crypto.createHmac('sha256', secret()).update(data).digest('base64url');
 }
 
 /**

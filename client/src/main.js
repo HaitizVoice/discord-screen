@@ -1,5 +1,6 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { createPlayer } from './player.js';
+import { createAudio } from './audio.js';
 import { createBroadcaster } from '../../shared/broadcaster.js';
 
 const $ = (id) => document.getElementById(id);
@@ -32,9 +33,14 @@ let reconnectDelay = 1000;
 let lagTimer = null;
 // Transmissão nascida aqui dentro, quando o Discord permite capturar no iframe.
 let myBroadcast = null;
-// Slot ampliado. Guardado fora do render porque a grade é reconstruída a cada
-// mudança de estado e o foco precisa sobreviver a isso.
-let focusedSlot = null;
+// Silenciar vale para tudo que chega e sobrevive a trocar de tela: é uma
+// preferência de quem assiste, não estado de uma transmissão.
+let mudo = read('mudo') === '1';
+// Qual tela está no palco, e se ela ocupa tudo. Guardados fora do render
+// porque a grade é reconstruída a cada mudança de estado da sala, e a escolha
+// de quem assiste precisa sobreviver a isso.
+let activeSlot = null;
+let telaCheia = false;
 
 // ------------------------------------------------------------------- helpers
 
@@ -61,14 +67,16 @@ function colorFor(id) {
 }
 
 /**
- * Avatares vêm do CDN do Discord, que o CSP da Activity bloqueia a menos que
- * exista um mapeamento /cdn → cdn.discordapp.com. Se não houver, o onerror
- * troca pelas iniciais — funciona dos dois jeitos, sem configuração extra.
+ * Avatares passam pelo nosso próprio servidor, não pelo CDN do Discord.
+ *
+ * O CSP da Activity bloqueia cdn.discordapp.com, e o proxy do Discord só
+ * repassa domínios mapeados no portal do desenvolvedor — sem esse mapeamento a
+ * foto caía sempre nas iniciais. Pela nossa rota a URL é a mesma dentro e fora
+ * da Activity, e não depende de configuração que ninguém lembra de fazer.
  */
 function avatarUrl(p) {
   if (!p.avatar) return null;
-  const path = `/avatars/${p.id}/${p.avatar}.png?size=128`;
-  return inDiscord ? `${P}/cdn${path}` : `https://cdn.discordapp.com${path}`;
+  return `${P}/api/avatar/${p.id}/${p.avatar}`;
 }
 
 function initials(name) {
@@ -114,6 +122,59 @@ function columnsFor(n) {
   return 4;
 }
 
+// Largura da barra lateral. É preferência de quem assiste, não estado da sala —
+// por isso vive no localStorage, e não no servidor.
+const STRIP_DEFAULT = 300;
+const STRIP_MIN = 200;
+let stripW = Number(read('stripW')) || STRIP_DEFAULT;
+
+const divider = document.createElement('div');
+divider.className = 'divider';
+divider.title = 'Arraste para redimensionar · duplo clique restaura';
+
+/** Aplica a largura guardada, respeitando o teto da janela atual. */
+function applyStrip() {
+  // O teto acompanha a janela: uma largura guardada grande demais engoliria o
+  // palco depois de alguém encolher o Discord.
+  const max = Math.max(STRIP_MIN, $('grid').clientWidth * 0.45);
+  $('grid').style.setProperty('--strip', `${Math.round(Math.min(max, stripW))}px`);
+}
+
+function setStrip(px) {
+  stripW = Math.max(STRIP_MIN, Math.round(px));
+  applyStrip();
+  store('stripW', String(stripW));
+}
+
+divider.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  divider.classList.add('dragging');
+
+  // Os ouvintes vão na janela, não no divisor: a grade é reconstruída a cada
+  // mudança de estado da sala, e o arrasto não pode morrer no meio disso.
+  // 21px = os 16 de padding da grade mais a meia largura do divisor.
+  const move = (ev) => setStrip($('grid').getBoundingClientRect().right - ev.clientX - 21);
+  const up = () => {
+    divider.classList.remove('dragging');
+    window.removeEventListener('pointermove', move);
+    window.removeEventListener('pointerup', up);
+  };
+
+  window.addEventListener('pointermove', move);
+  window.addEventListener('pointerup', up);
+});
+
+divider.addEventListener('dblclick', () => setStrip(STRIP_DEFAULT));
+window.addEventListener('resize', () => inRoom() && applyStrip());
+
+/**
+ * Duas formas de mostrar a sala, e o que decide é ter alguém transmitindo.
+ *
+ * Sem transmissão, uma grade de pessoas — a sala de espera. Com transmissão, um
+ * palco: a tela escolhida ocupa a área principal e, ao lado, ficam as outras
+ * telas em cima e as pessoas embaixo. Dar a grade inteira à tela esconderia
+ * quem está junto, e é a call que se perde nisso.
+ */
 function renderGrid() {
   const grid = $('grid');
 
@@ -123,87 +184,209 @@ function renderGrid() {
   if (!inRoom()) {
     grid.hidden = true;
     $('empty').hidden = true;
+    $('fullscreen').hidden = true;
     return;
   }
 
   const hasPeople = participants.length > 0;
   $('empty').hidden = hasPeople;
   grid.hidden = !hasPeople;
+
+  const casters = participants.filter((p) => p.broadcasting);
+
+  if (!casters.length) {
+    activeSlot = null;
+    telaCheia = false;
+  } else if (activeSlot === null || !available.has(activeSlot)) {
+    // Sempre há uma tela em destaque quando existe transmissão: chegar numa
+    // sala com tela no ar e ver só avatares esconderia o que importa.
+    activeSlot = casters.map((p) => slotOf(p.id)).find((s) => s !== null) ?? null;
+  }
+
+  const noPalco = activeSlot !== null;
+  $('fullscreen').hidden = !noPalco;
+  $('fullscreen').classList.toggle('on', telaCheia);
+  // A dica e o nome acessível andam juntos: o botão faz duas coisas conforme o
+  // estado, e anunciar sempre a mesma coisa mentiria para quem usa leitor.
+  const rotulo = telaCheia ? 'Sair da tela cheia' : 'Tela cheia';
+  $('fullscreen').dataset.tip = rotulo;
+  $('fullscreen').setAttribute('aria-label', rotulo);
+
   if (!hasPeople) return;
 
-  // Só faz sentido manter o foco enquanto aquele stream existe.
-  if (focusedSlot !== null && !streams.has(focusedSlot)) focusedSlot = null;
+  grid.classList.toggle('palco', noPalco);
+  grid.classList.toggle('cheia', noPalco && telaCheia);
 
-  grid.classList.toggle('focused', focusedSlot !== null);
-  grid.style.setProperty('--cols', columnsFor(participants.length));
   // Os canvas são reanexados abaixo; removê-los daqui não perde o conteúdo.
   grid.replaceChildren();
 
-  for (const p of participants) {
-    const slot = p.broadcasting ? slotOf(p.id) : null;
-    const stream = slot !== null ? streams.get(slot) : null;
-
-    const tile = document.createElement('div');
-    tile.className = p.broadcasting ? 'tile sharing' : 'tile';
-    if (slot !== null && slot === focusedSlot) tile.classList.add('focus');
-
-    if (stream) {
-      tile.append(stream.canvas);
-      tile.title = focusedSlot === slot ? 'Clique para voltar à grade' : 'Clique para ampliar';
-      tile.addEventListener('click', () => {
-        focusedSlot = focusedSlot === slot ? null : slot;
-        $('fullscreen').classList.toggle('on', focusedSlot !== null);
-        renderGrid();
-      });
-      // Botão direito para largar a tela, sem precisar caçar controle.
-      tile.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        openTileMenu(e.clientX, e.clientY, slot, p.name);
-      });
-
-      // O clique direito pode ser capturado pelo cliente do Discord antes de
-      // chegar aqui, então o botão visível é o caminho garantido.
-      const stop = document.createElement('button');
-      stop.className = 'tile-stop';
-      stop.title = 'Parar de assistir';
-      stop.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-      stop.addEventListener('click', (e) => {
-        e.stopPropagation();
-        unwatchSlot(slot);
-      });
-      tile.append(stop);
-    } else if (slot !== null) {
-      tile.append(buildWatchPrompt(slot, p.name));
-    } else {
-      tile.append(buildAvatar(p));
-    }
-
-    const footer = document.createElement('div');
-    footer.className = 'tile-footer';
-
-    const badge = document.createElement('div');
-    badge.className = 'tile-name';
-    if (p.broadcasting) {
-      const dot = document.createElement('span');
-      dot.className = 'dot';
-      badge.append(dot);
-    }
-    // textContent, nunca innerHTML: nome vem do Discord, é conteúdo de terceiro.
-    badge.append(document.createTextNode(p.name));
-    footer.append(badge);
-
-    if (slot !== null) footer.append(buildWatchers(slot));
-    tile.append(footer);
-
-    if (p.id === session?.user?.id) {
-      const you = document.createElement('span');
-      you.className = 'tile-you';
-      you.textContent = 'você';
-      tile.append(you);
-    }
-
-    grid.append(tile);
+  if (!noPalco) {
+    grid.style.setProperty('--cols', columnsFor(participants.length));
+    grid.append(...participants.map((p) => buildTile(p).el));
+    return;
   }
+
+  const dono = available.get(activeSlot)?.userId;
+  const emCena = participants.find((p) => p.id === dono) ?? {
+    id: dono ?? 'desconhecido',
+    name: 'Transmitindo',
+    broadcasting: true,
+  };
+  grid.append(buildTile(emCena, { palco: true }).el);
+
+  if (telaCheia) return;
+
+  applyStrip();
+  grid.append(divider, buildSidebar(casters));
+}
+
+/**
+ * Barra lateral: as outras telas em cima, as pessoas embaixo.
+ *
+ * Telas primeiro porque é o que se olha; pessoas depois porque é o que se
+ * confere. Cada uma no formato que merece — a tela como miniatura, a pessoa
+ * como linha, que cabe muito mais gente no mesmo espaço.
+ */
+function buildSidebar(casters) {
+  const barra = document.createElement('aside');
+  barra.className = 'sidebar';
+
+  const outras = casters.filter((p) => slotOf(p.id) !== activeSlot);
+  if (outras.length) {
+    barra.append(secaoTitulo(outras.length === 1 ? 'Outra tela' : 'Outras telas'));
+    for (const p of outras) barra.append(buildTile(p).el);
+  }
+
+  barra.append(
+    secaoTitulo(participants.length === 1 ? '1 pessoa' : `${participants.length} pessoas`)
+  );
+  for (const p of participants) barra.append(buildPerson(p));
+
+  return barra;
+}
+
+function secaoTitulo(texto) {
+  const t = document.createElement('h2');
+  t.className = 'sidebar-title';
+  t.textContent = texto;
+  return t;
+}
+
+/** Linha de participante. Compacta de propósito: a tela é a estrela. */
+function buildPerson(p) {
+  const linha = document.createElement('div');
+  linha.className = 'person';
+  linha.append(buildAvatar(p));
+
+  const nome = document.createElement('span');
+  nome.className = 'person-name';
+  // textContent, nunca innerHTML: nome vem do Discord, é conteúdo de terceiro.
+  nome.textContent = p.id === session?.user?.id ? `${p.name} (você)` : p.name;
+  linha.append(nome);
+
+  if (p.broadcasting) {
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.title = 'Compartilhando a tela';
+    linha.append(dot);
+  }
+
+  return linha;
+}
+
+/**
+ * Um tile: a tela de quem transmite, ou o avatar de quem só assiste.
+ *
+ * `palco` distingue o tile em destaque dos da lateral, e é o que decide o que o
+ * clique faz: no palco, alterna tela cheia; na lateral, promove aquela tela.
+ */
+function buildTile(p, { palco = false } = {}) {
+  const slot = p.broadcasting ? slotOf(p.id) : null;
+  const stream = slot !== null ? streams.get(slot) : null;
+  const isMe = p.id === session?.user?.id;
+
+  const tile = document.createElement('div');
+  tile.className = p.broadcasting ? 'tile sharing' : 'tile';
+  if (palco) tile.classList.add('tile-palco');
+
+  const aoClicar = () => {
+    if (palco) telaCheia = !telaCheia;
+    else activeSlot = slot;
+    renderGrid();
+  };
+
+  if (stream) {
+    tile.append(stream.canvas);
+    tile.title = palco
+      ? telaCheia
+        ? 'Clique para sair da tela cheia'
+        : 'Clique para ver em tela cheia'
+      : 'Clique para ver em destaque';
+    tile.addEventListener('click', aoClicar);
+    // Botão direito para largar a tela, sem precisar caçar controle.
+    tile.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openTileMenu(e.clientX, e.clientY, slot, p.name);
+    });
+
+    // Entre pedir para assistir e o primeiro quadro chegar existe uma espera
+    // real: sem este aviso ela é indistinguível de um travamento.
+    if (!stream.started) tile.append(buildLoading());
+
+    // O clique direito pode ser capturado pelo cliente do Discord antes de
+    // chegar aqui, então o botão visível é o caminho garantido.
+    const stop = document.createElement('button');
+    stop.className = 'tile-stop';
+    stop.dataset.tip = 'Parar de assistir';
+    stop.setAttribute('aria-label', `Parar de assistir ${p.name}`);
+    stop.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+    stop.addEventListener('click', (e) => {
+      e.stopPropagation();
+      unwatchSlot(slot);
+    });
+    tile.append(stop);
+  } else if (slot !== null) {
+    // O convite tem botão próprio, que para o clique antes de chegar no tile.
+    if (!palco) tile.addEventListener('click', aoClicar);
+    tile.append(buildWatchPrompt(slot, p.name, isMe));
+  } else {
+    tile.append(buildAvatar(p));
+  }
+
+  const footer = document.createElement('div');
+  footer.className = 'tile-footer';
+
+  const badge = document.createElement('div');
+  badge.className = 'tile-name';
+  if (p.broadcasting) {
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    badge.append(dot);
+  }
+  badge.append(document.createTextNode(p.name));
+  footer.append(badge);
+
+  if (slot !== null) footer.append(buildWatchers(slot));
+  tile.append(footer);
+
+  if (isMe) {
+    const you = document.createElement('span');
+    you.className = 'tile-you';
+    you.textContent = 'você';
+    tile.append(you);
+  }
+
+  return { el: tile, slot };
+}
+
+/** Espera pelo primeiro quadro. Sai sozinha quando o decoder desenha. */
+function buildLoading() {
+  const wrap = document.createElement('div');
+  wrap.className = 'tile-loading';
+  wrap.innerHTML = '<span class="spinner"></span>';
+  wrap.append(document.createTextNode('Conectando…'));
+  return wrap;
 }
 
 /** Quantas pessoas assistem esta tela; a lista aparece ao passar o mouse. */
@@ -213,21 +396,23 @@ function buildWatchers(slot) {
   const badge = document.createElement('div');
   badge.className = 'tile-watchers';
   badge.innerHTML =
-    '<svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>' +
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>' +
     '<circle cx="12" cy="7" r="4"/></svg>';
   badge.append(document.createTextNode(String(people.length)));
+  badge.title = people.length === 1 ? '1 pessoa assistindo' : `${people.length} pessoas assistindo`;
 
   const list = document.createElement('div');
-  list.className = 'watchers-list';
+  list.className = 'hover-list';
 
   if (!people.length) {
     const empty = document.createElement('span');
-    empty.className = 'watchers-empty';
+    empty.className = 'hover-empty';
     empty.textContent = 'Ninguém assistindo';
     list.append(empty);
   } else {
     for (const w of people) {
       const row = document.createElement('span');
+      row.className = 'hover-row';
       row.textContent = w.name;
       list.append(row);
     }
@@ -238,15 +423,15 @@ function buildWatchers(slot) {
 }
 
 /** Tela cinza com o convite para assistir — nada é baixado até clicar. */
-function buildWatchPrompt(slot, name) {
+function buildWatchPrompt(slot, name, isMe) {
   const wrap = document.createElement('div');
   wrap.className = 'watch-prompt';
 
   const btn = document.createElement('button');
   btn.className = 'btn go';
   btn.innerHTML =
-    '<svg viewBox="0 0 24 24"><path d="M3 5h18v11H3z"/><path d="M8 20h8"/></svg>';
-  btn.append(document.createTextNode('Assistir tela'));
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v11H3z"/><path d="M8 20h8"/></svg>';
+  btn.append(document.createTextNode(isMe ? 'Ver minha tela' : 'Assistir tela'));
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     watchSlot(slot);
@@ -254,7 +439,9 @@ function buildWatchPrompt(slot, name) {
 
   const who = document.createElement('span');
   who.className = 'watch-who';
-  who.textContent = `${name} está transmitindo`;
+  // Ver a própria tela é conferência, não bisbilhotice: o texto precisa dizer
+  // que o que está no ar é a sua, não a de outra pessoa com o seu nome.
+  who.textContent = isMe ? 'Sua transmissão está no ar' : `${name} está transmitindo`;
 
   wrap.append(btn, who);
   return wrap;
@@ -288,8 +475,7 @@ function openProfile() {
   $('profileId').textContent = inDiscord ? `Discord · ${session.user.id}` : 'modo local';
   $('profileInput').value = me.name;
 
-  $('profileModal').hidden = false;
-  wakeHud();
+  $('profileModal').hidden = false;
   $('profileInput').focus();
   $('profileInput').select();
 }
@@ -391,6 +577,40 @@ function buildAvatar(p) {
   return img;
 }
 
+/**
+ * Quem está na sala, listado na pílula do topo.
+ *
+ * Com telas no ar a grade passa a ser delas, então é aqui que ainda dá para ver
+ * a sala inteira — inclusive quem só assiste.
+ */
+function buildPeopleList() {
+  const list = document.createElement('div');
+  list.className = 'hover-list';
+
+  if (!participants.length) {
+    const empty = document.createElement('span');
+    empty.className = 'hover-empty';
+    empty.textContent = 'Ninguém na sala';
+    list.append(empty);
+    return list;
+  }
+
+  for (const p of participants) {
+    const row = document.createElement('span');
+    row.className = 'hover-row';
+    if (p.broadcasting) {
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      row.append(dot);
+    }
+    // textContent, nunca innerHTML: nome vem do Discord, é conteúdo de terceiro.
+    row.append(document.createTextNode(p.id === session?.user?.id ? `${p.name} (você)` : p.name));
+    list.append(row);
+  }
+
+  return list;
+}
+
 function renderBar() {
   $('people').replaceChildren();
   $('people').insertAdjacentHTML(
@@ -400,11 +620,10 @@ function renderBar() {
       '<path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
   );
   $('people').append(document.createTextNode(String(participants.length)));
+  $('people').append(buildPeopleList());
 
   const casters = participants.filter((p) => p.broadcasting);
-  // myBroadcast entra no OU porque o `state` leva um instante para chegar, e
-  // sem isso o botão pisca de volta para "Compartilhar" logo após começar.
-  const iAmCasting = Boolean(myBroadcast) || casters.some((p) => p.id === session?.user?.id);
+  const iAmCasting = iAmBroadcasting();
 
   const btn = $('share');
   btn.classList.toggle('go', !iAmCasting);
@@ -416,6 +635,16 @@ function renderBar() {
   // externa é configurada por lá, e daqui não dá para mexer nela.
   $('liveSettings').hidden = !myBroadcast;
 
+  // O botão de som só existe quando há som para silenciar.
+  const temSom = [...streams.values()].some((s) => s.audio);
+  $('mute').hidden = !temSom;
+  $('mute').classList.toggle('on', mudo && temSom);
+  const rotuloSom = mudo ? 'Ligar o som' : 'Silenciar';
+  $('mute').dataset.tip = rotuloSom;
+  $('mute').setAttribute('aria-label', rotuloSom);
+  $('muteOn').hidden = mudo;
+  $('muteOff').hidden = !mudo;
+
   renderProfileButton();
 
   $('pWho').textContent = casters.length ? casters.map((p) => p.name).join(', ') : 'ninguém';
@@ -426,12 +655,41 @@ function renderBar() {
 /** Prepara o lugar do transmissor; o decoder só nasce quando o config chega. */
 function openStream(slot, userId) {
   closeStream(slot);
+
   const canvas = document.createElement('canvas');
-  streams.set(slot, {
+  const s = {
     userId,
     canvas,
-    player: createPlayer(canvas, { onError: (m) => toast(m, true) }),
-  });
+    // Vira true no primeiro quadro desenhado. Até lá o tile mostra "Conectando…"
+    // em vez de uma caixa preta que não se distingue de um travamento.
+    started: false,
+    player: createPlayer(canvas, {
+      onError: (m) => toast(m, true),
+      onFirstFrame: () => {
+        s.started = true;
+        renderGrid();
+      },
+    }),
+    // Só nasce quando a transmissão anuncia que tem som — nem toda tem.
+    audio: null,
+  };
+
+  streams.set(slot, s);
+}
+
+/** Liga o som desta transmissão. Chamado quando a config de áudio chega. */
+function startAudio(slot, config) {
+  const s = streams.get(slot);
+  if (!s) return;
+
+  s.audio?.stop();
+  s.audio = createAudio({ onError: (m) => toast(m, true) });
+  if (!s.audio.start(config)) {
+    s.audio = null;
+    return;
+  }
+  s.audio.setMudo(mudo);
+  renderBar();
 }
 
 function startStream(slot, config) {
@@ -446,9 +704,11 @@ function closeStream(slot) {
   const s = streams.get(slot);
   if (!s) return;
   s.player.stop();
+  s.audio?.stop();
   s.canvas.remove();
   streams.delete(slot);
-  if (focusedSlot === slot) focusedSlot = null;
+  // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
+  if (activeSlot === slot) activeSlot = null;
 }
 
 function endStream(slot) {
@@ -478,7 +738,7 @@ function closeAllStreams() {
 function ensureStatsTimer() {
   if (lagTimer) return;
   lagTimer = setInterval(() => {
-    const s = streams.get(focusedSlot) ?? streams.values().next().value;
+    const s = streams.get(activeSlot) ?? streams.values().next().value;
     if (!s) return;
     $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
     $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
@@ -494,19 +754,37 @@ boot().catch((err) => {
 });
 
 async function boot() {
-  checkVersion();
+  const config = await loadConfig();
+  checkVersion(config.asset);
 
   // Sem login o lobby ainda abre: dá para ver as salas antes de entrar. Só
   // criar e entrar é que pedem identidade.
-  session = inDiscord ? await authDiscord() : await authWeb();
+  session = inDiscord ? await authDiscord(config.clientId) : await authWeb();
 
   renderProfileButton();
+
+  // Dentro do Discord não existe lobby: a atividade já É a sala daquela call, e
+  // oferecer uma lista de salas ali seria oferecer uma escolha entre uma opção.
+  // No site é o contrário — não há call nenhuma para herdar, então a lista de
+  // salas é a única forma de as pessoas se encontrarem.
+  if (inDiscord) return entrarNaCall();
 
   // Lido antes de showLobby, que limpa o parâmetro da URL ao voltar ao lobby.
   const alvo = new URLSearchParams(location.search).get('sala');
 
   await showLobby();
   if (session && alvo) await joinById(alvo);
+}
+
+/** Abre a sala desta call, criando-a na primeira pessoa que chega. */
+async function entrarNaCall() {
+  setEmpty('Entrando…', 'Sala desta call');
+  try {
+    const tokens = await post(`${P}/api/rooms/call`, { identity: session.identity });
+    openRoom(tokens, { id: tokens.roomId, name: 'Sala da call' });
+  } catch (err) {
+    setEmpty('Não foi possível entrar', err.message);
+  }
 }
 
 // ---------------------------------------------------------------- login web
@@ -614,7 +892,25 @@ function inRoom() {
 const LOBBY_REFRESH_MS = 4000;
 let lobbyTimer = null;
 
-async function showLobby() {
+/**
+ * Larga a sala atual por completo.
+ *
+ * Funil único: sair pelo botão, a sala fechar sozinha e o arranque precisam
+ * deixar exatamente o mesmo estado para trás. Parar a transmissão vem primeiro
+ * porque a captura da aba externa só para se o servidor avisar, e depois do
+ * close() não sobra por onde avisar.
+ */
+function limparSala() {
+  stopMyBroadcast();
+
+  closeAllStreams();
+  available.clear();
+  watching.clear();
+  participants = [];
+  lastRoomState = null;
+  activeSlot = null;
+  telaCheia = false;
+
   if (roomInfo) remove(`sala:${roomInfo.id}`);
   roomTokens = null;
   roomInfo = null;
@@ -622,6 +918,10 @@ async function showLobby() {
 
   ws?.close();
   ws = null;
+}
+
+async function showLobby() {
+  limparSala();
 
   $('lobby').hidden = false;
   $('grid').hidden = true;
@@ -632,10 +932,17 @@ async function showLobby() {
   $('share').hidden = true;
   $('liveSettings').hidden = true;
 
+  // O dock inteiro sai de cena: todo controle dele é de dentro da sala, e o
+  // cabeçalho do lobby já traz perfil e criar sala.
+  $('fullscreen').hidden = true;
+  $('settings').hidden = true;
+  $('settings').classList.remove('on');
+  $('panel').hidden = true;
+  $('profile').hidden = true;
+
   // O login só aparece para convidado: quem já entrou pelo Discord não tem o
   // que melhorar.
   $('loginBtn').hidden = inDiscord || !session?.isGuest;
-  $('profile').hidden = !session;
   $('people').hidden = true;
 
   await loadRooms();
@@ -662,14 +969,7 @@ async function loadRooms() {
 
   lobbyRooms = rooms;
 
-  // A sala da call vem primeiro e existe mesmo antes de alguém entrar: é o
-  // caminho de um clique para quem só quer mostrar a tela para a call.
   const cards = rooms.map(roomCard);
-  if (session?.call && !rooms.some((r) => r.isCall)) {
-    cards.unshift(
-      roomCard({ id: `call-${session.call}`, name: 'Sala da call', owner: 'a call', isCall: true, people: 0, streams: 0 })
-    );
-  }
 
   if (!cards.length) {
     list.replaceChildren(msgRow('Nenhuma sala aberta. Crie a primeira.'));
@@ -688,18 +988,12 @@ function msgRow(text) {
 
 function roomCard(room) {
   const card = document.createElement('button');
-  card.className = room.isCall ? 'room-card room-card-call' : 'room-card';
+  card.className = 'room-card';
 
   const top = document.createElement('div');
   top.className = 'room-card-top';
 
-  if (room.isCall) {
-    top.insertAdjacentHTML(
-      'afterbegin',
-      '<svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/>' +
-        '<path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14"/></svg>'
-    );
-  } else if (room.locked) {
+  if (room.locked) {
     top.insertAdjacentHTML(
       'afterbegin',
       '<svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/>' +
@@ -716,9 +1010,7 @@ function roomCard(room) {
   const meta = document.createElement('span');
   meta.className = 'room-card-meta';
   const pessoas = room.people === 1 ? '1 pessoa' : `${room.people} pessoas`;
-  meta.textContent = room.isCall
-    ? `${pessoas} · só quem está na call`
-    : `${pessoas} · por ${room.owner}`;
+  meta.textContent = `${pessoas} · por ${room.owner}`;
 
   card.append(top, meta);
 
@@ -735,17 +1027,6 @@ function roomCard(room) {
 
 async function enterRoom(room, password) {
   if (!session) return;
-
-  // A sala da call tem porta própria: quem valida é a presença no canal.
-  if (room.isCall) {
-    try {
-      const tokens = await post(`${P}/api/rooms/call`, { identity: session.identity });
-      openRoom(tokens, room);
-    } catch (err) {
-      toast(err.message, true);
-    }
-    return;
-  }
 
   try {
     const tokens = await post(`${P}/api/rooms/join`, {
@@ -776,8 +1057,7 @@ function askPassword(room, error) {
   $('joinError').textContent = error ?? '';
   $('joinError').hidden = !error;
   if (!error) $('joinPass').value = '';
-  $('joinModal').hidden = false;
-  wakeHud();
+  $('joinModal').hidden = false;
   $('joinPass').focus();
 }
 
@@ -824,10 +1104,15 @@ function openRoom(tokens, room) {
   $('lobby').hidden = true;
   $('empty').hidden = false;
   $('share').hidden = false;
-  $('leaveRoom').hidden = false;
-  $('roomPill').hidden = false;
   $('people').hidden = false;
+  $('settings').hidden = false;
+  $('profile').hidden = false;
   $('loginBtn').hidden = true;
+
+  // Dentro do Discord não há lista para onde voltar nem outra sala com que
+  // confundir esta: quem fecha a atividade é o próprio Discord.
+  $('roomPill').hidden = inDiscord;
+  $('leaveRoom').hidden = inDiscord;
 
   clearInterval(lobbyTimer);
   lobbyTimer = null;
@@ -837,17 +1122,18 @@ function openRoom(tokens, room) {
   connect();
 }
 
-$('leaveRoom').addEventListener('click', () => {
-  myBroadcast?.stop();
-  myBroadcast = null;
-  closeAllStreams();
-  available.clear();
-  watching.clear();
-  participants = [];
-  lastRoomState = null;
-  focusedSlot = null;
-  showLobby();
-});
+// A limpeza toda — inclusive parar de transmitir — vive em showLobby.
+$('leaveRoom').addEventListener('click', () => showLobby());
+
+/** Client id e versão do bundle, decididos pelo servidor. */
+async function loadConfig() {
+  try {
+    return await fetch(`${P}/api/config`, { cache: 'no-store' }).then((r) => r.json());
+  } catch {
+    // Nem o id nem o diagnóstico podem impedir a sala de abrir.
+    return {};
+  }
+}
 
 /**
  * Detecta bundle velho e recarrega.
@@ -859,28 +1145,29 @@ $('leaveRoom').addEventListener('click', () => {
  * Comparamos o nome do próprio arquivo (que leva hash de conteúdo) com o que o
  * servidor diz ser o atual.
  */
-async function checkVersion() {
-  try {
-    const mine = import.meta.url.split('/').pop().split('?')[0];
-    const { asset } = await fetch(`${P}/api/version`, { cache: 'no-store' }).then((r) => r.json());
-    if (!asset || asset === mine) return;
+function checkVersion(asset) {
+  // Em desenvolvimento o Vite serve `main.js` sem hash nenhum, enquanto o
+  // servidor relata o nome do último build. Comparar os dois acusa uma
+  // desatualização que não existe e joga a página num recarregamento eterno.
+  if (import.meta.env.DEV) return;
 
-    // Se recarregar não resolveu, o HTML servido também está velho: avisa em
-    // vez de entrar em laço de reload.
-    if (sessionStorage.getItem('reloadedFor') === asset) {
-      toast('Versão desatualizada e o cache não cede. Feche e abra a atividade novamente.', true);
-      return;
-    }
-    sessionStorage.setItem('reloadedFor', asset);
-    location.reload();
-  } catch {
-    // Diagnóstico é secundário: nunca deve impedir a sala de abrir.
+  const mine = import.meta.url.split('/').pop().split('?')[0];
+  if (!asset || asset === mine) return;
+
+  // Se recarregar não resolveu, o HTML servido também está velho: avisa em
+  // vez de entrar em laço de reload.
+  if (sessionStorage.getItem('reloadedFor') === asset) {
+    toast('Versão desatualizada e o cache não cede. Feche e abra a atividade novamente.', true);
+    return;
   }
+  sessionStorage.setItem('reloadedFor', asset);
+  location.reload();
 }
 
-async function authDiscord() {
-  const clientId = params.get('client_id') ?? import.meta.env.VITE_DISCORD_CLIENT_ID;
-  if (!clientId) throw new Error('client_id ausente. Configure VITE_DISCORD_CLIENT_ID.');
+async function authDiscord(clientId) {
+  if (!clientId) {
+    throw new Error('O servidor está sem as credenciais do Discord. Rode: npm run configurar');
+  }
 
   sdk = new DiscordSDK(clientId);
   await sdk.ready();
@@ -953,9 +1240,14 @@ function connect() {
   });
 
   ws.addEventListener('message', (e) => {
-    // Primeiro byte do quadro é o slot: roteia para o decoder daquela pessoa.
+    // Primeiro byte é o slot, segundo é o tipo: um diz de quem, o outro diz
+    // para qual decodificador — som e imagem dividem o mesmo canal.
     if (typeof e.data !== 'string') {
-      streams.get(new DataView(e.data).getUint8(0))?.player.push(e.data);
+      const view = new DataView(e.data);
+      const s = streams.get(view.getUint8(0));
+      if (!s) return;
+      if (view.getUint8(1) === 3) s.audio?.push(e.data);
+      else s.player.push(e.data);
       return;
     }
 
@@ -988,6 +1280,16 @@ function connect() {
       watching.delete(msg.slot);
       closeStream(msg.slot);
       renderGrid();
+
+      // `initial` marca o inventário de quem acabou de entrar. Sem essa
+      // distinção, entrar numa sala com telas no ar dispararia um aviso por
+      // tela, todos anunciando algo que já estava acontecendo.
+      if (!msg.initial && msg.userId !== session?.user?.id) {
+        const quem = participants.find((p) => p.id === msg.userId)?.name;
+        toast(
+          quem ? `${quem} começou a compartilhar a tela.` : 'Alguém começou a compartilhar a tela.'
+        );
+      }
     } else if (msg.type === 'config') {
       const info = available.get(msg.slot);
       if (info) info.config = msg.config;
@@ -995,14 +1297,31 @@ function connect() {
         openStream(msg.slot, info?.userId ?? msg.slot);
         startStream(msg.slot, msg.config);
       }
+    } else if (msg.type === 'audio-config') {
+      // Pode chegar antes de eu pedir para assistir; aí não há o que ligar, e
+      // o servidor reenvia assim que o pedido chegar.
+      if (watching.has(msg.slot)) startAudio(msg.slot, msg.config);
     } else if (msg.type === 'stream-stop') {
+      // Só avisa quem estava assistindo: para os demais nada sumiu da tela.
+      if (watching.has(msg.slot)) {
+        const dono = available.get(msg.slot)?.userId;
+        const quem = participants.find((p) => p.id === dono)?.name;
+        toast(quem ? `${quem} parou de compartilhar.` : 'A transmissão foi encerrada.');
+      }
       available.delete(msg.slot);
       watching.delete(msg.slot);
       endStream(msg.slot);
     } else if (msg.type === 'room-gone') {
       roomTokens = null;
-      toast('A sala foi fechada.', true);
-      showLobby();
+      // No Discord a sala é a da call: ela é recriada e a atividade volta para
+      // ela. No site, quem some é a sala escolhida, então o lugar é a lista.
+      if (inDiscord) {
+        limparSala();
+        entrarNaCall();
+      } else {
+        toast('A sala foi fechada.', true);
+        showLobby();
+      }
     } else if (msg.type === 'error') {
       toast(msg.message, true);
     }
@@ -1029,20 +1348,39 @@ function connect() {
 
 // --------------------------------------------------------------------- ações
 
+/**
+ * Estou transmitindo?
+ *
+ * myBroadcast entra no OU porque o `state` leva um instante para chegar, e sem
+ * isso o botão pisca de volta para "Compartilhar" logo após começar.
+ */
+function iAmBroadcasting() {
+  if (myBroadcast) return true;
+  return participants.some((p) => p.broadcasting && p.id === session?.user?.id);
+}
+
+/**
+ * Encerra a minha transmissão, tenha ela nascido aqui ou na aba externa.
+ *
+ * Funil único de propósito: parar pelo botão, sair da sala e a sala fechar
+ * precisam encerrar do mesmo jeito. Deixar a captura viva depois de sair é
+ * vazamento de tela, não detalhe de interface — e a aba externa tem conexão
+ * própria, então só o servidor consegue mandá-la parar.
+ */
+function stopMyBroadcast() {
+  myBroadcast?.stop();
+  myBroadcast = null;
+  if (participants.some((p) => p.broadcasting && p.id === session?.user?.id)) {
+    ws?.send(JSON.stringify({ type: 'stop-broadcast' }));
+  }
+}
+
 $('share').addEventListener('click', () => {
   if (!session) return;
 
-  // Transmissão nascida aqui dentro: encerra direto.
-  if (myBroadcast) {
-    myBroadcast.stop();
-    myBroadcast = null;
+  if (iAmBroadcasting()) {
+    stopMyBroadcast();
     renderBar();
-    return;
-  }
-
-  // Transmissão numa aba externa: pede ao servidor que avise aquela aba.
-  if (participants.some((p) => p.broadcasting && p.id === session.user.id)) {
-    ws?.send(JSON.stringify({ type: 'stop-broadcast' }));
     return;
   }
 
@@ -1073,11 +1411,17 @@ function openModal(mode) {
     $('mFps').value = String(s.fps);
   }
 
-  $('modal').hidden = false;
-  wakeHud();
+  $('modal').hidden = false;
 }
 
 $('liveSettings').addEventListener('click', () => openModal('live'));
+
+$('mute').addEventListener('click', () => {
+  mudo = !mudo;
+  store('mudo', mudo ? '1' : '0');
+  for (const s of streams.values()) s.audio?.setMudo(mudo);
+  renderBar();
+});
 
 $('modalSwap').addEventListener('click', async () => {
   if (!myBroadcast) return;
@@ -1119,6 +1463,7 @@ async function broadcastFromHere() {
     wsUrl: `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(shareToken)}`,
     bitrate: Number($('mQuality').value),
     fps: Number($('mFps').value),
+    audio: $('mAudio').checked,
     onEnd: () => {
       myBroadcast = null;
       renderBar();
@@ -1172,6 +1517,7 @@ $('modalGo').addEventListener('click', async () => {
   const url = new URL(roomTokens.shareUrl);
   url.searchParams.set('q', $('mQuality').value);
   url.searchParams.set('fps', $('mFps').value);
+  url.searchParams.set('som', $('mAudio').checked ? '1' : '0');
 
   if (inDiscord) {
     try {
@@ -1196,8 +1542,7 @@ $('newRoom').addEventListener('click', () => {
   if (!session) return;
   $('createName').value = '';
   $('createPass').value = '';
-  $('createModal').hidden = false;
-  wakeHud();
+  $('createModal').hidden = false;
   $('createName').focus();
 });
 
@@ -1264,57 +1609,25 @@ $('roomSave').addEventListener('click', async () => {
 function openRoomSettings() {
   $('roomSub').textContent = roomInfo?.name ?? '';
   $('roomPass').value = '';
-  $('roomModal').hidden = false;
-  wakeHud();
+  $('roomModal').hidden = false;
   $('roomPass').focus();
 }
 
 $('roomSettings').addEventListener('click', openRoomSettings);
 
-// --------------------------------------------------------------------- HUD
-
-const HUD_IDLE_MS = 2500;
-let hudTimer = null;
-
-/**
- * Mostra o HUD e reprograma o desaparecimento.
- *
- * Ele não some enquanto o mouse estiver sobre os controles ou o painel estiver
- * aberto — sumir debaixo do cursor é a forma mais rápida de irritar.
- */
-function wakeHud() {
-  $('hud').classList.remove('idle');
-  clearTimeout(hudTimer);
-  hudTimer = setTimeout(() => {
-    const busy =
-      $('hud').matches(':hover') ||
-      !$('panel').hidden ||
-      !inRoom() ||
-      ['modal', 'profileModal', 'createModal', 'joinModal', 'roomModal'].some(
-        (id) => !$(id).hidden
-      );
-    if (busy) return wakeHud();
-    $('hud').classList.add('idle');
-  }, HUD_IDLE_MS);
-}
-
-for (const evt of ['mousemove', 'mousedown', 'touchstart', 'keydown']) {
-  window.addEventListener(evt, wakeHud, { passive: true });
-}
-wakeHud();
+// ----------------------------------------------------------------- painel
 
 $('settings').addEventListener('click', () => {
   const panel = $('panel');
   panel.hidden = !panel.hidden;
   $('settings').classList.toggle('on', !panel.hidden);
-  wakeHud();
 });
 
+// O estado visual do botão é decidido por renderGrid, que é quem sabe se há
+// tela no palco — aqui só se troca a intenção.
 $('fullscreen').addEventListener('click', () => {
-  if (!streams.size) return;
-  // Com vários no ar, alterna para o primeiro; clicar no tile escolhe outro.
-  focusedSlot = focusedSlot !== null ? null : streams.keys().next().value;
-  $('fullscreen').classList.toggle('on', focusedSlot !== null);
+  if (activeSlot === null) return;
+  telaCheia = !telaCheia;
   renderGrid();
 });
 
@@ -1329,10 +1642,9 @@ window.addEventListener('keydown', (e) => {
     }
   }
 
-  // Esc sai do modo ampliado — é o reflexo de todo mundo.
-  if (focusedSlot !== null && !document.fullscreenElement) {
-    focusedSlot = null;
-    $('fullscreen').classList.remove('on');
+  // Esc sai da tela cheia — é o reflexo de todo mundo.
+  if (telaCheia) {
+    telaCheia = false;
     renderGrid();
   }
 });

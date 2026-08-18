@@ -8,7 +8,7 @@
  * Toda a lógica de captura e codificação vive em /shared/broadcaster.js, a mesma
  * usada dentro da Activity — aqui é só a interface.
  */
-import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=1';
+import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=2';
 
 const $ = (id) => document.getElementById(id);
 
@@ -66,6 +66,15 @@ if (!payload) {
 function applyPresets() {
   const q = query.get('q');
   const fps = query.get('fps');
+  const som = query.get('som');
+
+  // A opção de som veio decidida da atividade, então a caixa some junto com os
+  // seletores — repetir a mesma escolha aqui só confundiria.
+  if (som !== null) {
+    $('withAudio').checked = som === '1';
+    document.querySelector('.check').hidden = true;
+  }
+
   if (!q && !fps) return;
 
   if (q) $('quality').value = q;
@@ -74,7 +83,8 @@ function applyPresets() {
   for (const row of document.querySelectorAll('#setup .row')) row.hidden = true;
 
   const mbps = (Number($('quality').value) / 1e6).toFixed(1).replace('.', ',');
-  $('presetLine').textContent = `${mbps} Mb/s · ${$('fps').value} fps`;
+  const comSom = $('withAudio').checked ? ' · com som' : '';
+  $('presetLine').textContent = `${mbps} Mb/s · ${$('fps').value} fps${comSom}`;
   $('presetLine').hidden = false;
 }
 
@@ -90,6 +100,7 @@ async function start() {
     wsUrl: `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}`,
     bitrate: Number($('quality').value),
     fps: Number($('fps').value),
+    audio: $('withAudio').checked,
     onStatus: (s) =>
       setStatus(
         `Codec: ${s.codec} · ${s.width}×${s.height} · captura ${s.direct ? 'direta' : 'via <video>'}`

@@ -17,6 +17,9 @@
 import crypto from 'node:crypto';
 
 const MAX_BROADCASTERS = 4;
+// Sala é objeto em memória criado por qualquer pessoa autenticada: sem teto,
+// um laço de "criar sala" consome a RAM do processo.
+const MAX_ROOMS_PER_INSTANCE = 20;
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
 const MAX_NAME = 32;
 const MAX_ROOM_NAME = 40;
@@ -37,6 +40,7 @@ const LOCKOUT_MS = 30 * 1000;
 const SLOT_BYTE = 0;
 const TYPE_BYTE = 1;
 const KEYFRAME = 1;
+const AUDIO = 3;
 
 const rooms = new Map();
 
@@ -105,6 +109,11 @@ export function setPassword(room, userId, password) {
 // ------------------------------------------------------------------ registro
 
 export function createRoom({ instance, name, ownerId, ownerName, password }) {
+  const abertas = [...rooms.values()].filter((r) => r.instance === instance).length;
+  if (abertas >= MAX_ROOMS_PER_INSTANCE) {
+    return { error: 'Limite de salas abertas atingido. Feche uma antes de criar outra.' };
+  }
+
   const escolhido = String(name ?? '').replace(/\s+/g, ' ').trim();
   // Nome é opcional: sem ele, um baseado em quem criou.
   const clean = (escolhido || `Sala de ${ownerName}`).slice(0, MAX_ROOM_NAME);
@@ -140,8 +149,7 @@ export const getRoom = (id) => rooms.get(id) ?? null;
  * Não tem dono nem senha — quem controla o acesso é a própria call, já que só
  * entra quem o Discord confirmou estar conectado ao canal.
  */
-export function ensureCallRoom(instance, channelId) {
-  const id = `call-${channelId}`;
+export function ensureCallRoom(instance, id) {
   let room = rooms.get(id);
   if (room) {
     // A instância da Activity muda a cada relançamento no mesmo canal; o canal
@@ -172,10 +180,16 @@ export function ensureCallRoom(instance, channelId) {
   return room;
 }
 
-/** Lista pública: nunca vaza hash de senha, só se ela existe. */
+/**
+ * Lista pública: nunca vaza hash de senha, só se ela existe.
+ *
+ * A sala automática da call fica de fora: dentro do Discord a atividade entra
+ * nela direto, e no site ela nunca poderia ser aberta. Listá-la seria mostrar
+ * uma porta que não abre.
+ */
 export function listRooms(instance) {
   return [...rooms.values()]
-    .filter((r) => r.instance === instance)
+    .filter((r) => r.instance === instance && !r.isCall)
     .sort((a, b) => a.createdAt - b.createdAt)
     .map((r) => ({
       id: r.id,
@@ -331,7 +345,7 @@ export function attachBroadcaster(room, ws, info) {
   const slot = freeSlot(room);
   if (slot === null) return 'Sem espaço para mais transmissões.';
 
-  const entry = { ws, info, slot, streaming: false, config: null };
+  const entry = { ws, info, slot, streaming: false, config: null, audioConfig: null };
   room.broadcasters.set(info.id, entry);
   room.slots.set(slot, entry);
   ws.__entry = entry;
@@ -345,6 +359,7 @@ export function attachBroadcaster(room, ws, info) {
 export function startStream(room, entry) {
   entry.streaming = true;
   entry.config = null;
+  entry.audioConfig = null;
   // Transmissão nova recomeça do zero: ninguém assiste até pedir.
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
@@ -352,6 +367,22 @@ export function startStream(room, entry) {
   }
   toViewers(room, { type: 'stream-start', slot: entry.slot, userId: entry.info.id });
   broadcastState(room);
+}
+
+/**
+ * Config do áudio, guardada e repassada igual à do vídeo.
+ *
+ * Quem começa a assistir no meio precisa dela para montar o decodificador — e,
+ * ao contrário do vídeo, aqui não existe keyframe para servir de ponto de
+ * partida: sem a config, nenhum pacote de som é aproveitável.
+ */
+export function setAudioConfig(room, entry, config) {
+  entry.audioConfig = config;
+  for (const v of room.viewers) {
+    if (v.__watching?.has(entry.slot)) {
+      sendJson(v, { type: 'audio-config', slot: entry.slot, config });
+    }
+  }
 }
 
 export function setConfig(room, entry, config) {
@@ -368,13 +399,26 @@ export function pushChunk(room, entry, chunk) {
   // não conseguir injetar quadros no stream de outra pessoa.
   if (chunk[SLOT_BYTE] !== entry.slot) return;
 
-  const isKeyframe = chunk[TYPE_BYTE] === KEYFRAME;
+  const tipo = chunk[TYPE_BYTE];
+  const isKeyframe = tipo === KEYFRAME;
+  const isAudio = tipo === AUDIO;
 
   for (const v of room.viewers) {
     if (v.readyState !== v.OPEN) continue;
 
     // Assistir é opt-in: quem não pediu esta tela não recebe os bytes dela.
     if (!v.__watching.has(entry.slot)) continue;
+
+    // Áudio não depende de keyframe — cada pacote Opus se decodifica sozinho —,
+    // então não passa pelo controle de "já recebeu ponto de partida".
+    if (isAudio) {
+      if (v.bufferedAmount > MAX_BUFFERED_BYTES) {
+        room.droppedChunks++;
+        continue;
+      }
+      v.send(chunk);
+      continue;
+    }
 
     if (isKeyframe) {
       if (v.bufferedAmount > MAX_BUFFERED_BYTES * 2) {
@@ -400,6 +444,7 @@ export function stopStream(room, entry) {
   if (!entry.streaming) return;
   entry.streaming = false;
   entry.config = null;
+  entry.audioConfig = null;
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
@@ -426,17 +471,24 @@ export function broadcasterOf(room, userId) {
 export function watch(room, ws, slot) {
   const entry = room.slots.get(slot);
   if (!entry || !entry.streaming) return;
+  // Repetir o pedido não muda nada, mas custaria um broadcast de estado para a
+  // sala inteira — um cliente em laço faria o servidor inundar todo mundo.
+  if (ws.__watching.has(slot)) return;
 
   ws.__watching.add(slot);
   ws.__primed.delete(slot);
 
   if (entry.config) sendJson(ws, { type: 'config', slot, config: entry.config });
+  if (entry.audioConfig) {
+    sendJson(ws, { type: 'audio-config', slot, config: entry.audioConfig });
+  }
   requestKeyframe(entry);
   broadcastState(room);
 }
 
 export function unwatch(room, ws, slot) {
-  ws.__watching.delete(slot);
+  // Só avisa a sala se algo mudou de fato; ver a nota em watch().
+  if (!ws.__watching.delete(slot)) return;
   ws.__primed.delete(slot);
   broadcastState(room);
 }
@@ -453,7 +505,10 @@ export function attachViewer(room, ws, info) {
   // Anuncia o que está no ar, sem começar a mandar quadros: assistir é opt-in.
   for (const entry of room.broadcasters.values()) {
     if (!entry.streaming) continue;
-    sendJson(ws, { type: 'stream-start', slot: entry.slot, userId: entry.info.id });
+    // `initial` distingue este inventário de chegada de uma transmissão que
+    // começou agora: sem ele o cliente anunciaria "fulano começou a
+    // compartilhar" uma vez por tela já no ar, toda vez que alguém entra.
+    sendJson(ws, { type: 'stream-start', slot: entry.slot, userId: entry.info.id, initial: true });
   }
 
   broadcastState(room);

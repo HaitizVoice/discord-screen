@@ -24,6 +24,14 @@ const {
 
 const isProd = NODE_ENV === 'production';
 
+// Falha no arranque, não no primeiro pedido: subir sem segredo significa
+// assinar todos os tokens com o padrão público, e um servidor assim de pé é
+// pior do que um servidor que não sobe.
+if (isProd && !process.env.SESSION_SECRET) {
+  console.error('ERRO: SESSION_SECRET obrigatorio em producao — sem ele os tokens sao forjaveis.');
+  process.exit(1);
+}
+
 const app = express();
 app.use(express.json());
 
@@ -190,6 +198,40 @@ async function inVoiceChannel(guildId, channelId, userId) {
   }
 }
 
+/**
+ * Espelho do avatar do Discord.
+ *
+ * O CSP da Activity bloqueia cdn.discordapp.com, e o proxy do Discord só
+ * repassa domínios mapeados no portal do desenvolvedor. Servindo pelo nosso
+ * próprio /api, a mesma URL funciona dentro e fora da Activity, sem depender
+ * de configuração que ninguém lembra de fazer.
+ *
+ * O id e o hash são validados no formato exato do Discord: sem isso a rota
+ * viraria um proxy aberto, com o servidor buscando qualquer URL que pedissem.
+ */
+const AVATAR_ID = /^[0-9]{15,21}$/;
+const AVATAR_HASH = /^(a_)?[0-9a-f]{32}$/;
+
+app.get('/api/avatar/:id/:hash', async (req, res) => {
+  const { id, hash } = req.params;
+  if (!AVATAR_ID.test(id) || !AVATAR_HASH.test(hash)) return res.status(400).end();
+
+  try {
+    const upstream = await fetch(
+      `https://cdn.discordapp.com/avatars/${id}/${hash}.png?size=128`
+    );
+    if (!upstream.ok) return res.status(404).end();
+
+    // Tipo fixo, não o que o upstream disser: pedimos .png e é png que sai.
+    res.setHeader('Content-Type', 'image/png');
+    // O hash muda quando a pessoa troca a foto, então a URL é imutável.
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.end(Buffer.from(await upstream.arrayBuffer()));
+  } catch {
+    res.status(502).end();
+  }
+});
+
 /** Valida o token de identidade que acompanha toda operação de sala. */
 function identityOf(req, res) {
   const payload = verifyToken(req.body?.identity);
@@ -249,20 +291,21 @@ app.post('/api/rooms/create', (req, res) => {
 });
 
 /**
- * Entra na sala da call, criando-a se ainda não existir.
+ * A sala desta call. É a única sala que existe dentro do Discord: a atividade
+ * abre nela direto, sem lista, porque escolher entre uma opção só não é escolha.
  *
- * A permissão vem do token: só quem o Discord confirmou estar conectado ao
- * canal recebe o claim `call`. Sem senha — a própria call é a porta.
+ * Com o token do bot configurado, a porta é a presença no canal de voz,
+ * confirmada pelo próprio Discord. Sem ele, a porta é a instância da atividade
+ * — o mesmo escopo que a lista de salas sempre usou, então nada se afrouxa, e a
+ * atividade continua funcionando para quem não quer criar um bot.
  */
+const salaDaCall = (me) => (me.call ? `call-${me.call}` : `atividade-${me.instance}`);
+
 app.post('/api/rooms/call', (req, res) => {
   const me = identityOf(req, res);
   if (!me) return;
 
-  if (!me.call) {
-    return res.status(403).json({ error: 'Não foi possível confirmar que você está na call.' });
-  }
-
-  const room = R.ensureCallRoom(me.instance, me.call);
+  const room = R.ensureCallRoom(me.instance, salaDaCall(me));
   res.json(issueRoomTokens(room.id, me));
 });
 
@@ -277,7 +320,7 @@ app.post('/api/rooms/join', (req, res) => {
   // no canal, confirmada pelo Discord. Checar instância aqui recusaria por
   // motivo errado, já que o id dela vem do canal e não da instância.
   if (room.isCall) {
-    if (room.id !== `call-${me.call}`) {
+    if (room.id !== salaDaCall(me)) {
       return res.status(403).json({ error: 'Entre na call para acessar esta sala.' });
     }
     return res.json(issueRoomTokens(room.id, me));
@@ -377,19 +420,33 @@ app.get('/auth/callback', async (req, res) => {
 app.get('/api/health', (_req, res) => res.json({ ok: true, rooms: R.stats() }));
 
 /**
- * Nome do bundle atual, para a Activity detectar que está rodando uma versão
- * velha. O index.html é no-store, mas o cliente do Discord pode servir uma
- * cópia antiga mesmo assim — e aí o iframe fica preso num build anterior sem
- * nenhum sinal visível.
+ * O que o cliente precisa saber e só o servidor sabe, em tempo de execução.
+ *
+ * `clientId` vinha embutido no bundle (VITE_DISCORD_CLIENT_ID). Isso obrigava a
+ * rebuildar a cada troca de credencial, e esquecer o build não dava erro nenhum:
+ * a Activity abria normalmente e só quebrava na hora do login, longe da causa.
+ * O Client ID é público por natureza — aparece em toda URL de OAuth —, então
+ * servi-lo aqui não expõe nada. O secret continua sem sair do servidor.
+ *
+ * `asset` é o nome do bundle atual, para a Activity perceber que está rodando
+ * uma versão velha. O index.html vai com no-store, mas o cliente do Discord
+ * pode entregar uma cópia antiga assim mesmo, e o iframe fica preso num build
+ * anterior sem nenhum sinal visível.
  */
-app.get('/api/version', (_req, res) => {
+app.get('/api/config', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store');
+
+  let asset = null;
   try {
     const html = fs.readFileSync(path.join(clientDist, 'index.html'), 'utf8');
-    res.json({ asset: html.match(/assets\/(index-[A-Za-z0-9_-]+\.js)/)?.[1] ?? null });
+    asset = html.match(/assets\/(index-[A-Za-z0-9_-]+\.js)/)?.[1] ?? null;
   } catch {
-    res.json({ asset: null });
+    // Ainda sem build; em desenvolvimento quem serve o cliente é o Vite.
   }
+
+  // || e nao ??: uma variavel vazia no .env chega como string vazia, e o
+  // contrato aqui e "null significa nao configurado".
+  res.json({ clientId: DISCORD_CLIENT_ID || null, asset });
 });
 
 // Activity buildada (produção). Em dev o Vite serve o client na 5173.
@@ -419,7 +476,10 @@ app.get('*', (req, res, next) => {
 // -------------------------------------------------------------- WebSocket
 
 const server = createServer(app);
-const wss = new WebSocketServer({ noServer: true });
+// maxPayload: o relay repassa o buffer intacto para todos os espectadores, então
+// um quadro gigante de um transmissor adulterado sairia multiplicado por N. Um
+// keyframe 1080p a 5 Mbps não passa de algumas centenas de KB.
+const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
 
 server.on('upgrade', (req, socket, head) => {
   // O proxy do Discord entrega o caminho com o prefixo /.proxy/.
@@ -491,6 +551,9 @@ function handleBroadcaster(ws, room, info) {
     } else if (msg.type === 'config' && msg.config) {
       R.setConfig(room, entry, msg.config);
       console.log(`[room ${room.id}] codec de ${info.name}: ${msg.config.codec}`);
+    } else if (msg.type === 'audio-config' && msg.config) {
+      R.setAudioConfig(room, entry, msg.config);
+      console.log(`[room ${room.id}] audio de ${info.name}: ${msg.config.codec}`);
     } else if (msg.type === 'stop') {
       R.stopStream(room, entry);
       console.log(`[room ${room.id}] stream parada por ${info.name}`);
@@ -570,19 +633,34 @@ wss.on('connection', (ws) => {
 wss.on('close', () => clearInterval(heartbeat));
 
 server.listen(PORT, () => {
-  console.log(`servidor  : http://localhost:${PORT}`);
-  console.log(`publico   : ${PUBLIC_ORIGIN}`);
-  console.log(`captura   : ${PUBLIC_ORIGIN}/share.html`);
-  if (!DISCORD_CLIENT_ID) console.warn('aviso: DISCORD_CLIENT_ID nao configurado');
+  const local = `http://localhost:${PORT}`;
+
+  console.log('');
+  console.log(`  Sala de Tela no ar em  ${local}`);
+  console.log(`  Abra esse endereço no navegador para usar fora do Discord.`);
+  console.log('');
+
+  if (DISCORD_CLIENT_ID) {
+    console.log(`  Discord: ligado · endereço público ${PUBLIC_ORIGIN}`);
+  } else {
+    console.log('  Discord: desligado (só navegador).');
+    console.log('  Para usar dentro do Discord, rode: npm run configurar');
+  }
 
   // Erro fácil de cometer e difícil de diagnosticar: com PUBLIC_ORIGIN
   // apontando para o proxy, a página de captura abre dentro do sandbox do
   // Discord e getDisplayMedia volta a ser bloqueado.
   if (PUBLIC_ORIGIN.includes('discordsays.com')) {
-    console.error(
-      'ERRO: PUBLIC_ORIGIN aponta para o proxy do Discord.\n' +
-        '      A pagina de captura precisa abrir fora do iframe.\n' +
-        '      Use a URL do tunel (ex: https://algo.trycloudflare.com).'
-    );
+    console.error('');
+    console.error('  ERRO: o endereço público aponta para o proxy do Discord.');
+    console.error('  A tela de captura precisa abrir fora do Discord, senão a');
+    console.error('  captura é bloqueada. Rode: npm run tunel');
   }
+
+  if (DISCORD_CLIENT_ID && PUBLIC_ORIGIN.startsWith('http://localhost')) {
+    console.log('');
+    console.log('  Aviso: o Discord não alcança localhost. Rode: npm run tunel');
+  }
+
+  console.log('');
 });

@@ -22,6 +22,17 @@ const CANDIDATES = [
 // Keyframe periódico: seguro barato para quem reconecta fora do fluxo normal.
 const KEYFRAME_EVERY_MS = 3000;
 
+// Tipos do primeiro byte útil de cada pacote. O áudio anda pelo mesmo socket e
+// pelo mesmo cabeçalho do vídeo: um canal só, um formato só, e o servidor
+// continua repassando o buffer sem precisar abrir nada.
+const TIPO_KEYFRAME = 1;
+const TIPO_DELTA = 2;
+const TIPO_AUDIO = 3;
+
+// 96 kbps em Opus estéreo é transparente para som de aplicativo e de vídeo, e é
+// ruído perto dos megabits do vídeo — não vale economizar aqui.
+const AUDIO_BITRATE = 96_000;
+
 // Teto de resolução: acima disso banda e CPU disparam sem ganho de legibilidade.
 // A imagem é reduzida proporcionalmente, nunca cortada.
 const MAX_W = 1920;
@@ -55,16 +66,28 @@ export function supportError({ requireChromium = false } = {}) {
  * @param {string} opts.wsUrl        endpoint do relay, com o token de transmissor
  * @param {number} opts.bitrate      bits por segundo
  * @param {number} opts.fps
+ * @param {boolean} [opts.audio]     capturar também o som do computador
  * @param {(info:object)=>void} [opts.onStatus]  codec/resolução/caminho de captura
  * @param {(stats:object)=>void} [opts.onStats]  viewers, fps, mbps, segundos no ar
  * @param {(reason:string)=>void} [opts.onEnd]   encerrou (por qualquer motivo)
  * @param {(msg:string)=>void} [opts.onError]
  */
-export function createBroadcaster({ wsUrl, bitrate, fps, onStatus, onStats, onEnd, onError }) {
+export function createBroadcaster({
+  wsUrl,
+  bitrate,
+  fps,
+  audio = false,
+  onStatus,
+  onStats,
+  onEnd,
+  onError,
+}) {
   let ws = null;
   let stream = null;
   let encoder = null;
   let reader = null;
+  let audioEncoder = null;
+  let audioReader = null;
   let video = null;
   let config = null;
   let stage = null;
@@ -86,7 +109,17 @@ export function createBroadcaster({ wsUrl, bitrate, fps, onStatus, onStats, onEn
     // Precisa vir do gesto do usuário; qualquer await antes disso o invalida.
     stream = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: { ideal: fps, max: fps } },
-      audio: false,
+      // systemAudio: 'include' pede o som do computador em vez de só o da aba.
+      // Os tratamentos de voz ficam desligados: eles existem para microfone e,
+      // em som de aplicativo, cortam justamente o que se queria ouvir.
+      audio: audio
+        ? {
+            systemAudio: 'include',
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          }
+        : false,
     });
 
     const track = stream.getVideoTracks()[0];
@@ -140,7 +173,77 @@ export function createBroadcaster({ wsUrl, bitrate, fps, onStatus, onStats, onEn
     }, 1000);
 
     pump(track);
+    // Pedir áudio não garante receber: em vários sistemas a caixa "compartilhar
+    // o som" fica desmarcada, e o navegador devolve a tela sem faixa de som.
+    const audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack) pumpAudio(audioTrack);
+
     return stream;
+  }
+
+  // -------------------------------------------------------------------- áudio
+
+  /**
+   * Captura, codifica e envia o som.
+   *
+   * O AudioEncoder recebe os blocos no tamanho que o sistema entregar e devolve
+   * pacotes Opus de 20 ms — não é preciso reagrupar nada por fora. Cada pacote
+   * se decodifica sozinho, então não existe aqui o equivalente ao keyframe.
+   */
+  async function pumpAudio(track) {
+    if (!window.AudioEncoder || !window.MediaStreamTrackProcessor) return;
+
+    const s = track.getSettings();
+    const sampleRate = s.sampleRate || 48_000;
+    const numberOfChannels = Math.min(2, s.channelCount || 2);
+
+    try {
+      audioEncoder = new AudioEncoder({
+        output: onAudioEncoded,
+        // Som é acessório: se o encoder cair, a tela continua no ar.
+        error: (err) => console.warn('[audio encoder]', err.message),
+      });
+      audioEncoder.configure({ codec: 'opus', sampleRate, numberOfChannels, bitrate: AUDIO_BITRATE });
+    } catch (err) {
+      console.warn('[audio encoder]', err.message);
+      audioEncoder = null;
+      return;
+    }
+
+    // O mesmo caminho do vídeo: quem chega depois recebe isto ao pedir a tela.
+    ws?.send(
+      JSON.stringify({ type: 'audio-config', config: { codec: 'opus', sampleRate, numberOfChannels } })
+    );
+
+    audioReader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+    while (running) {
+      let dados;
+      try {
+        const { done, value } = await audioReader.read();
+        if (done) break;
+        dados = value;
+      } catch {
+        break;
+      }
+
+      if (audioEncoder?.state === 'configured') {
+        try {
+          audioEncoder.encode(dados);
+        } catch (err) {
+          console.warn('[audio encode]', err.message);
+        }
+      }
+      dados.close();
+    }
+  }
+
+  function onAudioEncoded(chunk) {
+    if (ws?.readyState !== WebSocket.OPEN) return;
+
+    const data = new Uint8Array(chunk.byteLength);
+    chunk.copyTo(data);
+    ws.send(empacotar(TIPO_AUDIO, chunk.timestamp ?? 0, data));
+    bytes += 18 + data.byteLength;
   }
 
   async function pickConfig(width, height) {
@@ -327,18 +430,31 @@ export function createBroadcaster({ wsUrl, bitrate, fps, onStatus, onStats, onEn
     const data = new Uint8Array(chunk.byteLength);
     chunk.copyTo(data);
 
-    // [1B slot][1B tipo][8B timestamp][8B relógio de envio][payload]
-    // O slot vem carimbado na origem para o servidor repassar o buffer intacto.
+    const buf = empacotar(
+      chunk.type === 'key' ? TIPO_KEYFRAME : TIPO_DELTA,
+      chunk.timestamp ?? 0,
+      data
+    );
+    ws.send(buf);
+    bytes += buf.byteLength;
+  }
+
+  /**
+   * [1B slot][1B tipo][8B timestamp][8B relógio de envio][payload]
+   *
+   * O slot vem carimbado na origem para o servidor repassar o buffer intacto, e
+   * o relógio de envio é o que permite medir o atraso do outro lado. Áudio e
+   * vídeo compartilham o formato: o tipo é a única coisa que os distingue.
+   */
+  function empacotar(tipo, timestamp, data) {
     const buf = new ArrayBuffer(18 + data.byteLength);
     const view = new DataView(buf);
     view.setUint8(0, mySlot);
-    view.setUint8(1, chunk.type === 'key' ? 1 : 2);
-    view.setFloat64(2, chunk.timestamp ?? 0);
+    view.setUint8(1, tipo);
+    view.setFloat64(2, timestamp);
     view.setFloat64(10, Date.now());
     new Uint8Array(buf, 18).set(data);
-
-    ws.send(buf);
-    bytes += buf.byteLength;
+    return buf;
   }
 
   function serializeConfig(dc) {
@@ -415,7 +531,14 @@ export function createBroadcaster({ wsUrl, bitrate, fps, onStatus, onStats, onEn
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
     const fresh = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: { ideal: fps, max: fps } },
-      audio: false,
+      audio: audio
+        ? {
+            systemAudio: 'include',
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+          }
+        : false,
     });
 
     const previous = stream;
@@ -444,6 +567,12 @@ export function createBroadcaster({ wsUrl, bitrate, fps, onStatus, onStats, onEn
     } else {
       pumpDirect(track);
     }
+
+    // A tela nova traz a própria faixa de som; a antiga morreu com o stream.
+    await audioReader?.cancel().catch(() => {});
+    audioReader = null;
+    const novoAudio = fresh.getAudioTracks()[0];
+    if (novoAudio && audioEncoder) pumpAudio(novoAudio);
 
     return fresh;
   }
@@ -486,13 +615,18 @@ export function createBroadcaster({ wsUrl, bitrate, fps, onStatus, onStats, onEn
 
     reader?.cancel().catch(() => {});
     reader = null;
+    audioReader?.cancel().catch(() => {});
+    audioReader = null;
 
-    if (encoder?.state === 'configured') {
-      try {
-        encoder.close();
-      } catch {}
+    for (const e of [encoder, audioEncoder]) {
+      if (e?.state === 'configured') {
+        try {
+          e.close();
+        } catch {}
+      }
     }
     encoder = null;
+    audioEncoder = null;
 
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'stop' }));

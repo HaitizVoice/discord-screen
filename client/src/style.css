@@ -53,7 +53,8 @@ body {
      da barra inferior. */
   grid-auto-rows: minmax(0, 1fr);
   gap: 10px;
-  padding: 12px;
+  /* Mesmo respiro nas quatro bordas: é o que separa o vídeo das barras. */
+  padding: 16px;
   overflow: hidden;
 }
 
@@ -80,47 +81,137 @@ body {
   cursor: pointer;
 }
 
-/* Modo ampliado: o tile em foco toma a área toda e os outros somem.
+/* Palco: a tela escolhida ocupa a área principal e, ao lado, uma barra com as
+   outras telas em cima e as pessoas embaixo. O divisor arrasta a divisão.
+
+   Dar a área inteira à tela e sumir com todo mundo é perder a call — e deixar
+   tudo igual numa grade condena a tela que importa ao tamanho de um avatar. A
+   barra resolve as duas, e quem decide o equilíbrio é quem está assistindo.
+
    Layout puro, sem Fullscreen API — funciona mesmo com a Permissions Policy
    `fullscreen` negada ao iframe da Activity. */
-.grid.focused {
-  grid-template-columns: 1fr;
-  align-content: stretch;
-  padding: 0;
+.grid.palco {
+  grid-template-columns: minmax(0, 1fr) 10px var(--strip, 300px);
+  grid-template-rows: minmax(0, 1fr);
   gap: 0;
 }
 
-.grid.focused .tile:not(.focus) {
+/* Tela cheia: só o palco. A barra de controles fica, senão não haveria saída
+   visível — sair por tecla é atalho, não é caminho. */
+.grid.palco.cheia {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+}
+
+.grid.palco.cheia .tile {
+  border-radius: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  /* Chegar ao fim da barra não pode rolar o que está atrás dela. */
+  overscroll-behavior: contain;
+}
+
+.sidebar-title {
+  margin: 6px 0 0;
+  font: 600 11px/1 inherit;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sidebar-title:first-child {
+  margin-top: 0;
+}
+
+/* Proporção fixa aqui, ao contrário da grade: a barra tem largura definida e
+   altura livre, então a miniatura precisa de uma altura própria para existir. */
+.sidebar .tile {
+  flex: 0 0 auto;
+  aspect-ratio: 16 / 9;
+}
+
+/* Na miniatura sobra pouco espaço: fica o nome, sai o resto. */
+.sidebar .tile-you,
+.sidebar .tile-watchers,
+.sidebar .watch-who {
   display: none;
 }
 
-.grid.focused .tile.focus {
-  border-radius: 0;
-  border-color: transparent;
+.sidebar .tile-name {
+  padding: 3px 7px;
+  font-size: 11.5px;
 }
 
+.sidebar .watch-prompt {
+  gap: 6px;
+  padding: 8px;
+}
 
-.tile-btn {
+/* Pessoa como linha, não como quadro: cabe muito mais gente no mesmo espaço, e
+   quem não está transmitindo não precisa de área de vídeo. */
+.person {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--tile);
+}
+
+.person .avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.person-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.person .dot {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.divider {
+  position: relative;
+  cursor: col-resize;
+  /* Sem isto o toque rola a página em vez de arrastar o divisor. */
+  touch-action: none;
+}
+
+/* A alça só se pinta quando serve para algo: parada, é um vinco discreto. */
+.divider::before {
+  content: '';
   position: absolute;
-  right: 8px;
-  bottom: 8px;
-  padding: 6px 11px;
-  border: 0;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  font-size: 14px;
-  line-height: 1;
+  inset: 6px 4px;
+  border-radius: 999px;
+  background: var(--line);
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity 0.15s, background 0.15s;
 }
 
-.tile:hover .tile-btn {
+.divider:hover::before,
+.divider.dragging::before {
   opacity: 1;
-}
-
-.tile-btn:hover {
-  background: rgba(0, 0, 0, 0.85);
+  background: var(--accent);
 }
 
 /* `contain` é definido como caber por inteiro: reduz OU amplia preservando a
@@ -206,6 +297,39 @@ body {
   stroke: currentColor;
   stroke-width: 2.2;
   stroke-linecap: round;
+}
+
+/* ---------------------------------------------- espera do primeiro quadro */
+
+/* Cobre o canvas enquanto ele ainda é preto. pointer-events: none para não
+   engolir o clique de ampliar de quem se cansou de esperar. */
+.tile-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.72);
+  color: var(--muted);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ------------------------------------------------------ menu de contexto */
@@ -294,13 +418,15 @@ body {
   opacity: 0.8;
 }
 
-.watchers-list {
+/* Uma lista suspensa, dois donos: a plateia de uma tela (abre para cima, a
+   partir do rodapé do tile) e as pessoas da sala (abre para baixo, a partir da
+   pílula do topo). Mesma caixa, só muda de que lado ela cresce. */
+.hover-list {
   position: absolute;
   left: 0;
-  bottom: calc(100% + 6px);
   display: none;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 130px;
   max-height: 190px;
   overflow-y: auto;
@@ -312,13 +438,37 @@ body {
   font-size: 12.5px;
   font-weight: 400;
   white-space: nowrap;
+  z-index: 6;
 }
 
-.tile-watchers:hover .watchers-list {
+.tile-watchers .hover-list {
+  bottom: calc(100% + 6px);
+}
+
+.pill .hover-list {
+  top: calc(100% + 8px);
+}
+
+.tile-watchers:hover .hover-list,
+.pill:hover .hover-list {
   display: flex;
 }
 
-.watchers-empty {
+.hover-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hover-row .dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+}
+
+.hover-empty {
   color: var(--muted);
 }
 
@@ -401,28 +551,34 @@ button {
   cursor: pointer;
 }
 
-/* Cobre a área toda mas deixa o clique passar; só os controles capturam. */
-.hud {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  pointer-events: none;
-  opacity: 1;
-  transition: opacity 0.25s ease;
-  z-index: 5;
-}
+/* As barras ocupam espaço no layout em vez de flutuar sobre o vídeo.
 
-.hud.idle {
-  opacity: 0;
-}
-
-.hud-top {
+   A versão anterior as deixava sobrepostas e as escondia sozinha depois de uns
+   segundos parada — o sumiço existia só para desobstruir a tela. Ocupando
+   lugar, elas não obstruem nada, e some junto o comportamento de aparecer e
+   desaparecer debaixo do cursor. */
+.topbar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 14px;
+  padding: 16px 16px 0;
+}
+
+.bottombar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+/* Sem nada visível dentro, a barra vira uma faixa vazia — é o que sobra no
+   lobby, onde todos os controles da sala saem de cena. */
+.topbar:not(:has(> :not([hidden]))),
+.bottombar:not(:has(.btn:not([hidden]))) {
+  display: none;
 }
 
 .room-pill {
@@ -432,25 +588,10 @@ button {
   white-space: nowrap;
 }
 
-.pill-btn {
-  border: 0;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.pill-btn:hover {
-  background: var(--danger);
-}
-
-.hud-bottom {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 14px;
-}
-
+/* Encostado embaixo, como a barra de controles de uma call. O respiro menor
+   embaixo do que em cima é de propósito: a barra pertence à borda da tela. */
 .pill {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -461,7 +602,6 @@ button {
   color: var(--text);
   font-size: 13px;
   font-weight: 500;
-  pointer-events: auto;
 }
 
 .pill svg {
@@ -479,38 +619,47 @@ button {
 
 .dock {
   display: flex;
-  gap: 8px;
-  pointer-events: auto;
+  gap: 10px;
 }
 
+/* Cápsulas separadas por função, como na call: a ação principal, o que é da
+   sala, e a saída. O agrupamento é o que deixa a barra legível de relance. */
 .group {
   display: flex;
-  gap: 4px;
-  padding: 6px;
+  gap: 6px;
+  padding: 5px;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(8px);
 }
 
+/* Grupo sem nenhum botão visível vira uma bolha escura solta na tela — é o que
+   sobrava no lobby, onde todos os controles da sala saem de cena. */
+.group:not(:has(> .btn:not([hidden]))) {
+  display: none;
+}
+
+/* position: relative ancora a dica que aparece ao passar o mouse. */
 .btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  height: 40px;
-  min-width: 40px;
-  padding: 0 12px;
+  height: 46px;
+  min-width: 46px;
+  padding: 0 14px;
   border: 0;
   border-radius: 999px;
   background: var(--tile);
   color: var(--text);
-  font: 500 13.5px/1 inherit;
+  font: 500 14px/1 inherit;
   transition: background 0.15s, color 0.15s;
 }
 
 .btn svg {
-  width: 19px;
-  height: 19px;
+  width: 21px;
+  height: 21px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
@@ -523,7 +672,7 @@ button {
 }
 
 .btn.wide {
-  padding: 0 18px;
+  padding: 0 20px;
 }
 
 /* Ação principal disponível */
@@ -576,7 +725,6 @@ button {
   background: rgba(0, 0, 0, 0.82);
   backdrop-filter: blur(10px);
   border: 1px solid var(--line);
-  pointer-events: auto;
 }
 
 .panel-row {
@@ -691,11 +839,6 @@ button {
   color: var(--text);
   font: inherit;
   transition: border-color 0.15s, background 0.15s;
-}
-
-.room-card-call {
-  background: #2b2f3a;
-  border-color: var(--accent);
 }
 
 .room-card:hover {
@@ -894,6 +1037,33 @@ button {
   font: inherit;
 }
 
+/* A caixa de marcar alinha pelo topo: o texto de apoio quebra em duas linhas e
+   centralizar deixaria a marca flutuando no meio da frase. */
+.field-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 16px 0 4px;
+  font-size: 13.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.field-check input {
+  width: 17px;
+  height: 17px;
+  margin: 1px 0 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+
+.field-check .opt {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .modal-note {
   margin: 16px 0 0;
   padding: 10px 12px;
@@ -911,12 +1081,63 @@ button {
   margin-top: 18px;
 }
 
+/* -------------------------------------------------------------------- dica */
+
+/* Botão que é só ícone precisa dizer o que faz. O `title` do navegador demora
+   quase um segundo, sai com a cara do sistema operacional e não aparece para
+   quem chega pelo teclado — esta versão resolve os três. */
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #111214;
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  color: var(--text);
+  font: 500 12.5px/1.2 inherit;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+  z-index: 40;
+}
+
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  opacity: 1;
+}
+
+/* ----------------------------------------------------------- acessibilidade */
+
+/* Quem navega por teclado precisa ver onde está. :focus-visible mantém o anel
+   longe de quem clica com o mouse. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Movimento é enfeite aqui — o ponto verde pulsante, o giro da espera, as
+   transições. Para quem pede menos animação, o estado continua legível parado. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ------------------------------------------------------------------- toast */
 
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 84px;
+  bottom: 88px;
   transform: translateX(-50%);
   max-width: min(440px, calc(100vw - 32px));
   padding: 11px 16px;

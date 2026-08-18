@@ -17,6 +17,34 @@ const token = query.get('t');
 
 let broadcaster = null;
 
+// Quantas leituras seguidas ficaram bem abaixo do alvo. Uma sozinha não diz
+// nada: o primeiro segundo sempre sai curto, e uma engasgada pontual também.
+let curtas = 0;
+let ritmoAvisado = false;
+
+/**
+ * Avisa quando o computador não está entregando os quadros pedidos.
+ *
+ * O encoder por software (vp8, quando não há H264 por hardware) não acompanha
+ * 60 fps em tela grande. O backpressure então descarta quadros — o que é a
+ * decisão certa, porque fila no encoder vira atraso que nunca mais sai — mas
+ * sem este aviso a pessoa escolhe 60, recebe 35 e não fica sabendo.
+ */
+function conferirRitmo({ fps, seconds }) {
+  const alvo = Number($('fps').value);
+  if (ritmoAvisado || seconds < 4) return;
+
+  curtas = fps < alvo * 0.7 ? curtas + 1 : 0;
+  if (curtas < 4) return;
+
+  ritmoAvisado = true;
+  setStatus(
+    `Seu computador está entregando ~${fps} dos ${alvo} quadros pedidos. ` +
+      'Para uma imagem mais estável, pare e escolha uma taxa menor.',
+    'aviso'
+  );
+}
+
 function setStatus(msg, kind = '') {
   const el = $('status');
   el.textContent = msg;
@@ -91,6 +119,8 @@ function applyPresets() {
 // -------------------------------------------------------------------- ações
 
 async function start() {
+  curtas = 0;
+  ritmoAvisado = false;
   $('start').disabled = true;
   setStatus('Aguardando você escolher a tela…');
 
@@ -111,6 +141,7 @@ async function start() {
       $('bitrate').textContent = `${s.mbps.toFixed(1)} Mb/s`;
       $('elapsed').textContent =
         `${String(Math.floor(s.seconds / 60)).padStart(2, '0')}:${String(s.seconds % 60).padStart(2, '0')}`;
+      conferirRitmo(s);
     },
     onAviso: (msg) => {
       setStatus(msg, 'aviso');

@@ -15,7 +15,7 @@
  * imagem durante o redimensionamento.
  */
 
-export function createPlayer(canvas, { onError, onFirstFrame } = {}) {
+export function createPlayer(canvas, { onError, onTamanho } = {}) {
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 
   let decoder = null;
@@ -91,9 +91,11 @@ export function createPlayer(canvas, { onError, onFirstFrame } = {}) {
   function draw(frame) {
     // Buffer no tamanho nativo do vídeo: é isso que define a proporção
     // intrínseca do elemento, e é o que impede o CSS de distorcer.
+    let mudou = false;
     if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
       canvas.width = frame.displayWidth;
       canvas.height = frame.displayHeight;
+      mudou = true;
     }
 
     ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
@@ -102,9 +104,11 @@ export function createPlayer(canvas, { onError, onFirstFrame } = {}) {
     frame.close();
     framesDrawn++;
 
-    if (virgem) {
+    // Avisa no primeiro quadro e sempre que a resolução muda: quem desenha o
+    // palco precisa das duas coisas — tirar o "conectando" e refazer a forma.
+    if (virgem || mudou) {
       virgem = false;
-      onFirstFrame?.();
+      onTamanho?.();
     }
   }
 

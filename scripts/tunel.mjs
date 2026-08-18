@@ -166,7 +166,7 @@ function configNeutro() {
   return caminho;
 }
 
-function anunciar(url, escreveu, temDiscord) {
+function anunciar(url, escreveu, clientId) {
   const dominio = url.replace('https://', '');
   console.log(`\n${cor.verde}${cor.forte}  Endereço do túnel: ${url}${cor.fim}`);
   console.log(
@@ -177,7 +177,7 @@ function anunciar(url, escreveu, temDiscord) {
 
   // Sem credencial do Discord o programa é só um site: falar de URL Mappings
   // ali seria instrução para um lugar onde a pessoa não tem o que fazer.
-  if (!temDiscord) {
+  if (!clientId) {
     console.log(`${cor.fraco}  Abra esse endereço no navegador para usar de qualquer lugar.${cor.fim}\n`);
     return;
   }
@@ -187,6 +187,15 @@ function anunciar(url, escreveu, temDiscord) {
   console.log('  E em OAuth2 → Redirects:');
   console.log(`\n      ${cor.verde}${url}/auth/callback${cor.fim}\n`);
   console.log(`${cor.fraco}  (esse endereço muda toda vez que este comando reinicia)${cor.fim}\n`);
+
+  // O link de instalação fica por último porque é o único que não muda — e é
+  // também o passo que mais some de vista. Sem a aplicação instalada em algum
+  // servidor, o comando de entry point existe, o Target está certo, e a
+  // atividade continua fora do seletor sem nada explicando por quê.
+  console.log('  E, se ainda não instalou a aplicação num servidor — uma vez só:');
+  console.log(
+    `\n      ${cor.verde}https://discord.com/oauth2/authorize?client_id=${clientId}${cor.fim}\n`
+  );
 }
 
 // ------------------------------------------------------------------ comando

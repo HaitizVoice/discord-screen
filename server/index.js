@@ -53,11 +53,21 @@ app.use(express.json());
 //
 // A lista é a cadeia inteira de quem embute: o iframe da Activity mora em
 // <id>.discordsays.com, e ele por sua vez está dentro do discord.com.
+// O frame-ancestors sozinho não bastou: quem serve o iframe é o proxy do
+// Discord, e ele repassa o X-Frame-Options da origem sem repassar o nosso CSP.
+// O console mostra "Refused to display ... because it set 'X-Frame-Options' to
+// 'sameorigin'". Ou seja, é o header em si que precisa não chegar lá.
+//
+// ALLOWALL não existe no padrão — e é justamente por isso que serve: diante de
+// um valor que não reconhece, o navegador ignora o header inteiro. Só funciona
+// se a hospedagem estiver adicionando o dela apenas quando a origem não mandou
+// nenhum; se ela sobrescrever, não há conserto possível daqui.
 app.use((_req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
     "frame-ancestors 'self' https://discord.com https://*.discord.com https://*.discordsays.com"
   );
+  res.setHeader('X-Frame-Options', 'ALLOWALL');
   next();
 });
 

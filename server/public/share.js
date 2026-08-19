@@ -208,14 +208,14 @@ async function start() {
   }
 }
 
-// Mantém o vídeo como está e troca só de onde vem o som — a única fonte que
-// não carrega o Discord junto é uma aba.
+// Mantém o vídeo como está e troca só de onde vem o som — as fontes que não
+// carregam o Discord junto são uma aba e a janela de um aplicativo.
 $('somAba').addEventListener('click', async () => {
   if (!broadcaster) return;
   try {
     await broadcaster.trocarSom();
-    setStatus('Som ligado, vindo da aba escolhida.', 'ok');
-    $('somAba').textContent = 'Trocar a aba do som';
+    setStatus('Som ligado, vindo da fonte escolhida.', 'ok');
+    $('somAba').textContent = 'Trocar a fonte do som';
   } catch (err) {
     if (err.name !== 'NotAllowedError') setStatus(err.message, 'error');
   }

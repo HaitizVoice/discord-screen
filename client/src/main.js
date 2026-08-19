@@ -747,7 +747,7 @@ function renderBar() {
   const somPendente = Boolean(myBroadcast?.somBloqueado?.());
   $('liveSettings').classList.toggle('atencao', somPendente);
   $('liveSettings').dataset.tip = somPendente
-    ? 'Som barrado — clique para escolher a aba'
+    ? 'Som barrado — clique para escolher a fonte'
     : 'Ajustes da transmissão';
 
   // O controle de som só existe quando há som para controlar.
@@ -1656,8 +1656,8 @@ function openModal(mode) {
   $('modalSom').hidden = !live || !myBroadcast;
   if (live && myBroadcast) {
     $('modalSom').textContent = myBroadcast.temSom()
-      ? 'Trocar a aba do som'
-      : 'Som de uma aba';
+      ? 'Trocar a fonte do som'
+      : 'Som de uma aba ou janela';
 
     const s = myBroadcast.getSettings();
     $('mQuality').value = String(s.bitrate);
@@ -1710,12 +1710,12 @@ $('modalSwap').addEventListener('click', async () => {
 });
 
 // A saída para quem quer tela inteira COM som: o vídeo continua o mesmo e o som
-// passa a vir de uma aba, que é a única fonte isolada do Discord.
+// passa a vir de uma aba ou de uma janela, que são as fontes isoladas do Discord.
 $('modalSom').addEventListener('click', async () => {
   if (!myBroadcast) return;
   try {
     await myBroadcast.trocarSom();
-    toast('Som ligado, vindo da aba escolhida.');
+    toast('Som ligado, vindo da fonte escolhida.');
     closeModal();
     renderBar();
   } catch (err) {

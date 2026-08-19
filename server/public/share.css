@@ -243,10 +243,6 @@ video {
   .bloco > div > button.danger {
     margin-top: auto;
   }
-
-  .sem-preview {
-    display: flex;
-  }
 }
 
 /* O lugar do preview enquanto não há preview.
@@ -268,6 +264,14 @@ video {
   background: #1a1b1e;
   color: var(--muted);
   font-size: 13px;
+}
+
+/* Precisa vir depois da regra acima: media query não soma especificidade, então
+   entre duas declarações iguais quem ganha é a que está mais abaixo. */
+@media (min-width: 900px) {
+  .sem-preview {
+    display: flex;
+  }
 }
 
 /* Um bloco por fonte. A régua acima separa sem gastar altura, que é o que

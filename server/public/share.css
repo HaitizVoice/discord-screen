@@ -236,7 +236,7 @@ video {
      nada encostaria em lugar nenhum. Por isso o botão azul cobre o bloco parado
      e o vermelho cobre o bloco no ar — cada um existe só no seu, então nunca
      aparecem os dois juntos. */
-  .bloco > div > button.primary {
+  .bloco > div > .acao {
     margin-top: auto;
   }
 
@@ -275,6 +275,95 @@ video {
   .sem-preview {
     display: flex;
   }
+}
+
+/* Ação principal e a seta que a acompanha, na mesma linha.
+
+   A seta é irmã do botão, não um item dentro dele: são duas ações distintas —
+   escolher e transmitir — e um botão dentro de outro não existe em HTML. */
+.acao {
+  position: relative;
+  display: flex;
+  gap: 8px;
+}
+
+.acao > .primary {
+  flex: 1;
+  margin: 0;
+}
+
+.acao > .seta {
+  flex: 0 0 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.seta svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Abre para cima porque o botão fica na base da coluna: para baixo o menu
+   nasceria fora da página. */
+.menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  min-width: 240px;
+  max-width: 100%;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #101114;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
+.menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 6px;
+  background: none;
+  color: var(--text, #f2f3f5);
+  font-size: 13px;
+  text-align: left;
+}
+
+.menu button:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* O tique marca a escolhida. O espaço fica reservado nas outras para os nomes
+   começarem todos na mesma coluna. */
+.menu button::before {
+  content: '';
+  flex: 0 0 14px;
+  color: var(--accent, #5865f2);
+}
+
+.menu button[aria-checked='true']::before {
+  content: '✓';
+}
+
+/* A prévia ocupa o mesmo lugar do placeholder — um exclui o outro, e a folga
+   até a ação é a mesma nos dois. Só a prévia: o vídeo do bloco no ar já tem o
+   respiro das estatísticas logo abaixo. */
+#tela-previa,
+#camera-previa {
+  margin-bottom: 16px;
 }
 
 /* Um bloco por fonte. A régua acima separa sem gastar altura, que é o que

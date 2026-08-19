@@ -45,6 +45,48 @@ function fitWithin(w, h) {
   return { width: even(Math.round(w * scale)), height: even(Math.round(h * scale)) };
 }
 
+/**
+ * Restrições do som capturado junto com a tela.
+ *
+ * Os tratamentos de voz ficam desligados: eles existem para microfone e, em som
+ * de aplicativo, cortam justamente o que se queria ouvir.
+ */
+export function restricoesDeSom() {
+  const c = {
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  };
+  if (navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio) {
+    c.restrictOwnAudio = true;
+  }
+  return c;
+}
+
+/**
+ * Opções da captura de tela.
+ *
+ * Exportada porque a prévia da página de captura precisa pedir exatamente o
+ * mesmo. Um stream aberto com opções diferentes não serve para transmitir
+ * depois: sem faixa de som, ligar o som exigiria escolher a tela de novo — e
+ * abrir o seletor duas vezes para o mesmo compartilhamento é o que a prévia
+ * existe para evitar.
+ *
+ * windowAudio: 'window' pede o som da janela escolhida em vez de só o da aba,
+ * que é o que destrava transmitir um jogo com o som dele.
+ */
+export function opcoesTela({ fps = 30, comSom = false, video } = {}) {
+  const opts = {
+    video: video ?? { frameRate: { ideal: fps, max: fps } },
+    audio: comSom ? restricoesDeSom() : false,
+  };
+  if (comSom) {
+    opts.windowAudio = 'window';
+    opts.systemAudio = 'exclude';
+  }
+  return opts;
+}
+
 /** Motivo pelo qual este navegador não consegue transmitir, ou null. */
 export function supportError({ requireChromium = false, fonte = 'tela' } = {}) {
   const camera = fonte === 'camera';
@@ -85,6 +127,11 @@ export function createBroadcaster({
   fps,
   audio = false,
   fonte = 'tela',
+  // Stream já aberto pela prévia. Reaproveitá-lo é o que evita abrir o seletor
+  // de tela duas vezes — e, na câmera, segurar o dispositivo em duas capturas.
+  streamPronto = null,
+  // Qual câmera, quando há mais de uma. Ignorado pela tela, que não tem lista.
+  deviceId = null,
   onStatus,
   onStats,
   onEnd,
@@ -119,7 +166,9 @@ export function createBroadcaster({
 
   async function start() {
     // Precisa vir do gesto do usuário; qualquer await antes disso o invalida.
-    stream = fonte === 'camera' ? await capturarCamera() : await capturarTela();
+    // A prévia já pagou esse preço, então quando ela existe não há o que pedir.
+    stream =
+      streamPronto ?? (fonte === 'camera' ? await capturarCamera() : await capturarTela());
 
     const track = stream.getVideoTracks()[0];
     // Tela é texto e interface, onde suavizar borra o que importa. Câmera é
@@ -205,6 +254,9 @@ export function createBroadcaster({
   function capturarCamera() {
     return navigator.mediaDevices.getUserMedia({
       video: {
+        // `exact` de propósito: escolher uma câmera e receber outra porque a
+        // pedida sumiu é pior que a falha, que ao menos diz o que houve.
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
         width: { ideal: 1280 },
         height: { ideal: 720 },
         frameRate: { ideal: fps, max: fps },
@@ -223,17 +275,6 @@ export function createBroadcaster({
    * sem ele, quem transmite enquanto assiste a outra tela devolveria o som dela
    * de volta para a sala, em laço. É experimental, então vai sob detecção.
    */
-  function audioConstraints() {
-    const c = {
-      echoCancellation: false,
-      noiseSuppression: false,
-      autoGainControl: false,
-    };
-    if (navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio) {
-      c.restrictOwnAudio = true;
-    }
-    return c;
-  }
 
   /**
    * Opções da captura de tela.
@@ -247,14 +288,7 @@ export function createBroadcaster({
    * veto do prepararSom, aplicado antes de o som existir — quem escolhe a tela
    * inteira volta sem faixa nenhuma, em vez de com uma que precisa ser morta.
    */
-  function opcoesCaptura({ video = { frameRate: { ideal: fps, max: fps } }, comSom = audio } = {}) {
-    const opts = { video, audio: comSom ? audioConstraints() : false };
-    if (comSom) {
-      opts.windowAudio = 'window';
-      opts.systemAudio = 'exclude';
-    }
-    return opts;
-  }
+  const opcoesCaptura = (over) => opcoesTela({ fps, comSom: audio, ...over });
 
   /**
    * Dá para confiar no som que veio junto de uma janela?

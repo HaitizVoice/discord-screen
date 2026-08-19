@@ -13,7 +13,7 @@
  * Toda a lógica de captura e codificação vive em /shared/broadcaster.js, a mesma
  * usada dentro da Activity — aqui é só a interface.
  */
-import { createBroadcaster, supportError } from '/shared/broadcaster.js?v=5';
+import { createBroadcaster, supportError, opcoesTela } from '/shared/broadcaster.js?v=6';
 
 const $ = (id) => document.getElementById(id);
 
@@ -120,14 +120,6 @@ document.addEventListener('visibilitychange', () => {
 });
 
 /**
- * A atividade pediu uma fonte.
- *
- * Câmera dá para ligar daqui mesmo: getUserMedia não exige gesto do usuário
- * depois que a permissão foi concedida. Tela não — `getDisplayMedia` exige
- * ativação transitória e lança InvalidStateError sem ela, então o seletor só
- * abre a partir de um clique nesta página. O que resta é chamar e esperar.
- */
-/**
  * A configuração mudou na engrenagem da atividade.
  *
  * Vale na hora para o que já está no ar — menos o som, que é decidido no
@@ -138,6 +130,17 @@ function aplicarConfig(novas) {
   for (const f of FONTES) paineis[f]?.aplicarQualidade();
 }
 
+/**
+ * A atividade pediu uma fonte.
+ *
+ * A câmera abre aqui mesmo, mas em prévia: getUserMedia não exige gesto do
+ * usuário depois da permissão concedida, então dá para mostrar o que ela vê — e
+ * mostrar é o certo, porque ir ao ar com a webcam errada não tem desfazer.
+ *
+ * Tela não abre nem em prévia: `getDisplayMedia` exige ativação transitória e
+ * lança InvalidStateError sem ela, então o seletor só nasce de um clique nesta
+ * página. O que resta é chamar e esperar.
+ */
 function atenderPedido(fonte, novas) {
   aplicarOpcoes(novas);
 
@@ -145,7 +148,7 @@ function atenderPedido(fonte, novas) {
   if (!painel || painel.ativo()) return;
 
   chamar(fonte);
-  if (fonte === 'camera') painel.ligar();
+  if (fonte === 'camera') painel.verCamera();
 }
 
 // --------------------------------------------------------------- controle
@@ -209,6 +212,46 @@ function criarPainel(fonte) {
   let curtas = 0;
   let ritmoAvisado = false;
 
+  /**
+   * Prévia local: o que a fonte mostra, antes de qualquer transmissão.
+   *
+   * Existe porque ir ao ar com a fonte errada não tem desfazer — quem está
+   * assistindo já viu a janela que não era para ver, ou a webcam que não era
+   * para ligar. Conferir e transmitir passam a ser dois gestos.
+   *
+   * O stream da prévia é reaproveitado pela transmissão, e é por isso que ela
+   * pede a tela com as mesmas opções: com outras, ligar o som depois exigiria
+   * escolher a tela de novo.
+   */
+  let previa = null;
+  // Qual câmera. `null` é o que o navegador escolher.
+  let dispositivo = null;
+
+  function pararPrevia() {
+    previa?.getTracks().forEach((t) => t.stop());
+    previa = null;
+    el('previa').srcObject = null;
+    el('previa').hidden = true;
+    el('vazio').hidden = false;
+  }
+
+  function mostrarPrevia(stream) {
+    previa = stream;
+    el('previa').srcObject = stream;
+    el('previa').play().catch(() => {});
+    el('previa').hidden = false;
+    el('vazio').hidden = true;
+
+    // A fonte pode acabar sozinha — webcam desconectada, janela fechada. Sem
+    // isto o último quadro fica congelado e a prévia passa a mentir.
+    stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+      if (previa === stream) {
+        pararPrevia();
+        setStatus(camera ? 'A câmera foi desligada.' : 'O compartilhamento acabou.');
+      }
+    });
+  }
+
   function setStatus(msg, kind = '') {
     const alvo = el('status');
     alvo.textContent = msg;
@@ -245,6 +288,99 @@ function criarPainel(fonte) {
     el('start').disabled = false;
   }
 
+  // ------------------------------------------------------ escolher a fonte
+
+  /** Abre a prévia da câmera, trocando a que estiver aberta. */
+  async function verCamera(id = dispositivo) {
+    setStatus('Abrindo a câmera…');
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: id ? { deviceId: { exact: id } } : true,
+        audio: false,
+      });
+      // Sem escolha explícita, adota a que o navegador deu: assim o tique do
+      // menu marca a que está no ar em vez de não marcar nenhuma.
+      dispositivo = id ?? s.getVideoTracks()[0]?.getSettings().deviceId ?? null;
+      pararPrevia();
+      mostrarPrevia(s);
+      setStatus('Prévia — ainda não está no ar.');
+      await listarCameras();
+    } catch (err) {
+      setStatus(
+        err.name === 'NotAllowedError'
+          ? 'Acesso à câmera negado. Libere a permissão na barra de endereço e tente de novo.'
+          : err.message,
+        'error'
+      );
+    }
+  }
+
+  /** Abre a prévia da tela. O seletor exige o clique, que é quem chama isto. */
+  async function verTela() {
+    try {
+      const s = await navigator.mediaDevices.getDisplayMedia(
+        opcoesTela({ fps: opcoes.fps, comSom: opcoes.som })
+      );
+      pararPrevia();
+      mostrarPrevia(s);
+      setStatus('Prévia — ainda não está no ar.');
+    } catch (err) {
+      // Cancelar o seletor é escolha, não falha.
+      if (err.name !== 'NotAllowedError') setStatus(err.message, 'error');
+    }
+  }
+
+  function fecharMenu() {
+    el('menu').hidden = true;
+    el('escolher').setAttribute('aria-expanded', 'false');
+  }
+
+  /**
+   * A lista de câmeras.
+   *
+   * Os nomes só chegam depois da permissão — antes dela o navegador entrega os
+   * dispositivos anônimos, para não revelar o hardware a quem não pediu nada.
+   * Por isso abrir o menu abre a prévia primeiro.
+   */
+  async function listarCameras() {
+    const cams = (await navigator.mediaDevices.enumerateDevices()).filter(
+      (d) => d.kind === 'videoinput'
+    );
+
+    el('menu').replaceChildren(
+      ...cams.map((d, i) => {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.setAttribute('role', 'menuitemradio');
+        b.setAttribute('aria-checked', String(d.deviceId === dispositivo));
+        b.textContent = d.label || `Câmera ${i + 1}`;
+        b.addEventListener('click', () => {
+          fecharMenu();
+          verCamera(d.deviceId);
+        });
+        li.append(b);
+        return li;
+      })
+    );
+  }
+
+  async function escolher() {
+    if (!camera) return verTela();
+
+    if (!el('menu').hidden) return fecharMenu();
+
+    if (!previa) await verCamera();
+    else await listarCameras();
+
+    // Sem câmera nenhuma não há menu a abrir; o status já explicou.
+    if (!el('menu').childElementCount) return;
+    el('menu').hidden = false;
+    el('escolher').setAttribute('aria-expanded', 'true');
+  }
+
+  // ------------------------------------------------------------- transmitir
+
   async function ligar() {
     // Pedido repetido não reabre nada: a segunda conexão seria recusada pelo
     // servidor, e o seletor de tela abriria por cima do que já está no ar.
@@ -263,6 +399,11 @@ function criarPainel(fonte) {
       fps: opcoes.fps,
       audio: !camera && opcoes.som,
       fonte,
+      // A prévia já pagou o gesto do usuário e a permissão: reaproveitá-la é o
+      // que evita o seletor de tela abrir uma segunda vez para o mesmo
+      // compartilhamento.
+      streamPronto: previa,
+      deviceId: camera ? dispositivo : null,
       onStatus: (s) =>
         setStatus(
           `Codec: ${s.codec} · ${s.width}×${s.height} · captura ${s.direct ? 'direta' : 'via <video>'}`
@@ -286,6 +427,13 @@ function criarPainel(fonte) {
         setStatus(reason);
       },
     });
+
+    // O broadcaster assume as faixas daqui para a frente, então a referência sai
+    // sem pará-las — pará-las seria desligar o que acabou de ir ao ar.
+    previa = null;
+    el('previa').srcObject = null;
+    el('previa').hidden = true;
+    el('vazio').hidden = false;
 
     try {
       const stream = await broadcaster.start();
@@ -311,12 +459,32 @@ function criarPainel(fonte) {
     broadcaster?.stop(camera ? 'Câmera desligada.' : 'Transmissão encerrada.')
   );
 
+  // stopPropagation para o clique não chegar ao document e fechar o que acabou
+  // de abrir.
+  el('escolher').addEventListener('click', (e) => {
+    e.stopPropagation();
+    escolher();
+  });
+
+  if (camera) {
+    document.addEventListener('click', fecharMenu);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') fecharMenu();
+    });
+  }
+
   return {
     ligar,
+    escolher,
+    verCamera,
     setStatus,
     aplicarQualidade: () => broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps }),
     ativo: () => Boolean(broadcaster),
-    parar: () => broadcaster?.stop(),
+    // Fechar a aba tem que soltar a câmera, esteja ela no ar ou só na prévia.
+    parar: () => {
+      broadcaster?.stop();
+      pararPrevia();
+    },
     trocarSom: () => broadcaster?.trocarSom(),
   };
 }

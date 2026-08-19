@@ -260,12 +260,11 @@ function applyPresets() {
   const fps = query.get('fps');
   const som = query.get('som');
 
-  // A opção de som veio decidida da atividade, então a caixa some junto com os
-  // seletores — repetir a mesma escolha aqui só confundiria.
-  if (som !== null) {
-    $('withAudio').checked = som === '1';
-    document.querySelector('.check').hidden = true;
-  }
+  // O que vem da atividade é ponto de partida, não decisão final: a caixa fica
+  // à vista. Ela sumia enquanto esta página só existia para o primeiro clique
+  // — agora a tela também nasce daqui, com a aba já aberta, e aí a escolha do
+  // som feita lá atrás pode não ser a que se quer agora.
+  if (som !== null) $('withAudio').checked = som === '1';
 
   if (!q && !fps) return;
 
@@ -274,9 +273,10 @@ function applyPresets() {
 
   for (const row of document.querySelectorAll('#setup .row')) row.hidden = true;
 
+  // Sem " · com som": a caixa está à vista e pode ser trocada, então repetir o
+  // estado dela aqui só criaria um rótulo que envelhece no primeiro clique.
   const mbps = (Number($('quality').value) / 1e6).toFixed(1).replace('.', ',');
-  const comSom = $('withAudio').checked ? ' · com som' : '';
-  $('presetLine').textContent = `${mbps} Mb/s · ${$('fps').value} fps${comSom}`;
+  $('presetLine').textContent = `${mbps} Mb/s · ${$('fps').value} fps`;
   $('presetLine').hidden = false;
 }
 

@@ -264,6 +264,9 @@ video {
   background: #1a1b1e;
   color: var(--muted);
   font-size: 13px;
+  /* Folga mínima até a ação. O `margin-top: auto` do botão já afasta os dois
+     quando a coluna sobra altura, mas quando não sobra eles encostavam. */
+  margin-bottom: 16px;
 }
 
 /* Precisa vir depois da regra acima: media query não soma especificidade, então

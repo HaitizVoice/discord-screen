@@ -25,6 +25,10 @@ const streams = new Map(); // slot -> { userId, canvas, player }
 const available = new Map(); // slot -> { userId, config }
 const watching = new Set(); // slots que eu pedi para assistir
 
+// Quem tem aba de captura aberta, segundo o servidor. É o que decide entre
+// falar com a aba existente e abrir outra.
+const abas = new Set();
+
 let sdk = null;
 let session = null;
 let clientId = null;
@@ -796,16 +800,20 @@ function renderBar() {
   cam.dataset.tip = rotuloCam;
   cam.setAttribute('aria-label', rotuloCam);
 
-  // A engrenagem só aparece para transmissão nascida aqui: a que roda na aba
-  // externa é configurada por lá, e daqui não dá para mexer nela.
-  $('liveSettings').hidden = !myBroadcast;
+  // A engrenagem fica sempre à mão: parada ela edita o que valerá na próxima
+  // transmissão, e é o único lugar onde essas opções existem agora. Segue os
+  // botões principais para não sobrar sozinha na barra do lobby, onde não há
+  // transmissão nenhuma para configurar.
+  $('liveSettings').hidden = $('share').hidden;
   // Pediram som e ele foi barrado: a engrenagem pisca, porque é atrás dela que
   // está a saída. Sem isso o aviso passa no toast e ninguém acha o caminho.
   const somPendente = Boolean(myBroadcast?.somBloqueado?.());
   $('liveSettings').classList.toggle('atencao', somPendente);
   $('liveSettings').dataset.tip = somPendente
     ? 'Som barrado — clique para escolher a aba'
-    : 'Ajustes da transmissão';
+    : myBroadcast
+      ? 'Ajustes da transmissão'
+      : 'Configurações';
 
   // O controle de som só existe quando há som para controlar.
   const temSom = [...streams.values()].some((s) => s.audio);
@@ -1526,6 +1534,9 @@ function connect() {
 
     if (msg.type === 'state') {
       participants = msg.participants ?? [];
+      abas.clear();
+      for (const uid of msg.abas ?? []) abas.add(uid);
+
       lastRoomState = msg.room ?? null;
 
       // A senha da sala só aparece para quem a criou.
@@ -1635,12 +1646,41 @@ function minhasFontes() {
 /**
  * Existe uma aba de captura minha conectada?
  *
- * O `myBroadcast` é sempre a tela capturada dentro do iframe, quando o Discord
- * permite. Qualquer transmissão minha além dela nasceu numa aba — e é essa aba
- * que sabe capturar as duas fontes.
+ * Quem responde é o servidor, pela lista `abas` do estado. Antes isto era
+ * deduzido do que estava no ar, e errava justamente no caso que mais importa:
+ * a aba recém-aberta, ainda sem transmitir, ficava invisível — e um novo clique
+ * abria outra em cima dela.
  */
 function abaAberta() {
-  return minhasFontes().size > (myBroadcast ? 1 : 0);
+  return abas.has(session?.user?.id);
+}
+
+/**
+ * As opções da próxima transmissão, editadas pela engrenagem.
+ *
+ * Ficam no localStorage porque são preferência de quem transmite, não estado da
+ * sala: quem escolheu 5 Mb/s uma vez não quer reescolher a cada abertura. E
+ * ficam aqui, e não num modal que aparece antes de cada início, porque decidir
+ * qualidade toda vez que se quer mostrar a tela é atrito no caminho curto.
+ */
+const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30, som: false };
+
+let ajustes = (() => {
+  try {
+    return { ...AJUSTES_PADRAO, ...JSON.parse(read('ajustes') ?? '{}') };
+  } catch {
+    return { ...AJUSTES_PADRAO };
+  }
+})();
+
+/** As opções no formato que a página de captura lê da URL. */
+function opcoesDaFonte(fonte) {
+  return {
+    q: String(ajustes.bitrate),
+    fps: String(ajustes.fps),
+    // Câmera vai sem som sempre: a voz já anda pela call.
+    som: fonte === 'camera' || !ajustes.som ? '0' : '1',
+  };
 }
 
 /**
@@ -1653,7 +1693,11 @@ function abaAberta() {
  */
 function ligarFonte(fonte) {
   if (abaAberta()) {
-    ws?.send(JSON.stringify({ type: 'start-broadcast', fonte }));
+    // As opções vão no pedido: a aba pode estar aberta desde antes da última
+    // vez que a engrenagem foi mexida.
+    ws?.send(
+      JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte(fonte) })
+    );
     toast(
       fonte === 'camera'
         ? 'Pedi para a sua aba de transmissão ligar a câmera. Se ela pedir permissão, autorize por lá.'
@@ -1661,7 +1705,43 @@ function ligarFonte(fonte) {
     );
     return;
   }
-  openModal('start', fonte);
+  abrirCaptura(fonte);
+}
+
+/**
+ * Abre a captura, aqui dentro se der e na aba se não der.
+ *
+ * Sem modal no meio: as opções já foram decididas na engrenagem, e perguntar de
+ * novo a cada início era o passo que sobrava entre querer mostrar a tela e
+ * mostrá-la.
+ */
+async function abrirCaptura(fonte) {
+  if (!roomTokens) return;
+
+  // Só a tela tem chance de nascer aqui dentro; o Discord anula o getUserMedia
+  // no iframe, então a câmera vai direto para a aba.
+  if (fonte === 'tela' && (await broadcastFromHere())) return;
+
+  const url = new URL(roomTokens.shareUrl);
+  for (const [chave, valor] of Object.entries(opcoesDaFonte(fonte))) {
+    url.searchParams.set(chave, valor);
+  }
+  url.searchParams.set('fonte', fonte);
+
+  if (inDiscord) {
+    try {
+      const res = await sdk.commands.openExternalLink({ url: url.toString() });
+      // Clientes antigos devolvem null; só tratamos false como recusa explícita.
+      if (res?.opened === false) {
+        toast('Você recusou abrir o link. Sem isso não dá para capturar a tela.', true);
+      }
+    } catch (err) {
+      toast(`Não foi possível abrir o link: ${err.message}`, true);
+    }
+    return;
+  }
+
+  window.open(url.toString(), '_blank');
 }
 
 /**
@@ -1710,33 +1790,25 @@ $('camera').addEventListener('click', () => {
 });
 
 /**
- * O mesmo modal serve para começar e para ajustar no ar. Em 'live' os campos
- * já vêm com os valores atuais e o botão aplica em vez de iniciar.
+ * O mesmo modal serve para configurar antes e para ajustar no ar.
+ *
+ * Em 'config' ele edita os padrões guardados e o botão salva; em 'live' vem com
+ * os valores da transmissão em curso e o botão aplica na hora. Começar deixou
+ * de passar por aqui: os botões da barra iniciam direto com o que está salvo.
  */
-let modalMode = 'start';
+let modalMode = 'config';
 
-/**
- * A fonte que o modal está configurando. Quem escolhe é o botão da barra, não
- * um seletor aqui dentro: com um botão por fonte, perguntar de novo seria
- * pedir duas vezes a mesma resposta.
- */
-let fonteEscolhida = 'tela';
-
-function openModal(mode, fonte = 'tela') {
+function openModal(mode) {
   modalMode = mode;
   const live = mode === 'live';
-  if (!live) fonteEscolhida = fonte;
 
-  $('modalTitle').textContent = live ? 'Ajustes da transmissão' : 'Compartilhar sua tela';
+  $('modalTitle').textContent = live ? 'Ajustes da transmissão' : 'Configurações';
   $('modalSub').textContent = live
     ? 'Vale na hora, sem derrubar quem está assistindo.'
-    : 'Escolha a tela e comece a transmitir.';
-  $('modalGo').textContent = live ? 'Aplicar' : 'Compartilhar tela';
+    : 'Valem para a próxima vez que você começar a transmitir.';
+  $('modalGo').textContent = live ? 'Aplicar' : 'Salvar';
   $('modalSwap').hidden = !live;
   $('modalNote').hidden = live;
-  // Ajustar uma transmissão no ar não muda de onde ela vem: trocar a fonte
-  // seria começar outra, e o botão desta caixa diz "Aplicar".
-  aplicarFonteNoModal();
 
   $('modalSom').hidden = !live || !myBroadcast;
   if (live && myBroadcast) {
@@ -1747,38 +1819,18 @@ function openModal(mode, fonte = 'tela') {
     const s = myBroadcast.getSettings();
     $('mQuality').value = String(s.bitrate);
     $('mFps').value = String(s.fps);
+  } else {
+    $('mQuality').value = String(ajustes.bitrate);
+    $('mFps').value = String(ajustes.fps);
+    $('mAudio').checked = ajustes.som;
   }
 
   $('modal').hidden = false;
 }
 
-// A nota da tela mora no HTML, que é onde ela é lida; guardá-la aqui evita
-// escrever a mesma frase em dois lugares que divergiriam.
-const NOTA_TELA = $('modalNote').textContent.trim();
-
-/**
- * A escolha da fonte muda três coisas na mesma caixa: o rótulo do botão, a
- * caixa de som — que não existe para câmera — e a nota do rodapé, porque a
- * câmera não tem o caminho de capturar dentro da atividade.
- */
-function aplicarFonteNoModal() {
-  // Em "live" quem manda é o openModal: ali o botão é "Aplicar" e a fonte nem
-  // aparece.
-  if (modalMode === 'live') return;
-
-  const camera = fonteEscolhida === 'camera';
-
-  $('modalGo').textContent = camera ? 'Ligar a câmera' : 'Compartilhar tela';
-  $('modalSub').textContent = camera
-    ? 'A câmera abre numa aba do seu navegador e vai sem som.'
-    : 'Escolha a tela e comece a transmitir.';
-  $('mAudioField').hidden = camera;
-  $('modalNote').textContent = camera
-    ? 'A câmera sempre abre numa aba do seu navegador: o Discord não concede acesso à câmera dentro da atividade.'
-    : NOTA_TELA;
-}
-
-$('liveSettings').addEventListener('click', () => openModal('live'));
+// Com algo no ar a engrenagem ajusta aquela transmissão; parada, ela edita o
+// que valerá na próxima.
+$('liveSettings').addEventListener('click', () => openModal(myBroadcast ? 'live' : 'config'));
 
 /** Espelha o volume atual no botão e no cursor, sem tocar no áudio. */
 function renderVolume() {
@@ -1859,9 +1911,9 @@ async function broadcastFromHere() {
 
   const b = createBroadcaster({
     wsUrl: `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(shareToken)}`,
-    bitrate: Number($('mQuality').value),
-    fps: Number($('mFps').value),
-    audio: $('mAudio').checked,
+    bitrate: ajustes.bitrate,
+    fps: ajustes.fps,
+    audio: ajustes.som,
     onAviso: (m) => toast(m, true),
     onEnd: () => {
       myBroadcast = null;
@@ -1893,7 +1945,7 @@ $('modal').addEventListener('click', (e) => {
   if (e.target === $('modal')) closeModal();
 });
 
-$('modalGo').addEventListener('click', async () => {
+$('modalGo').addEventListener('click', () => {
   // Ajuste no ar: aplica e fecha, sem tocar na captura.
   if (modalMode === 'live') {
     myBroadcast?.setQuality({
@@ -1904,41 +1956,18 @@ $('modalGo').addEventListener('click', async () => {
     return;
   }
 
-  const fonte = fonteEscolhida;
+  ajustes = {
+    bitrate: Number($('mQuality').value),
+    fps: Number($('mFps').value),
+    som: $('mAudio').checked,
+  };
+  store('ajustes', JSON.stringify(ajustes));
 
-  // O clique é o gesto de usuário que getDisplayMedia exige, então é aqui que
-  // dá para transmitir sem sair do Discord. A aba externa só entra se o iframe
-  // não tiver permissão de captura.
-  //
-  // Câmera nem tenta: o Discord anula o getUserMedia no iframe da atividade,
-  // então a tentativa gastaria o gesto do clique para falhar na certa.
-  if (fonte === 'tela' && (await broadcastFromHere())) return;
+  // A aba precisa saber na hora: ela mostra estas opções e usa a qualidade no
+  // que já está no ar. Sem isto o resumo dela envelhecia em silêncio.
+  ws?.send(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte('tela') }));
 
   closeModal();
-
-  // As opções seguem na URL: a página de captura já abre configurada, sem
-  // pedir as mesmas escolhas de novo.
-  const url = new URL(roomTokens.shareUrl);
-  url.searchParams.set('q', $('mQuality').value);
-  url.searchParams.set('fps', $('mFps').value);
-  url.searchParams.set('som', fonte === 'camera' || !$('mAudio').checked ? '0' : '1');
-  url.searchParams.set('fonte', fonte);
-
-  if (inDiscord) {
-    try {
-      const res = await sdk.commands.openExternalLink({ url: url.toString() });
-      // Clientes antigos devolvem null; só tratamos false como recusa explícita.
-      if (res?.opened === false) {
-        toast('Você recusou abrir o link. Sem isso não dá para capturar a tela.', true);
-        return;
-      }
-    } catch (err) {
-      toast(`Não foi possível abrir o link: ${err.message}`, true);
-      return;
-    }
-  } else {
-    window.open(url.toString(), '_blank');
-  }
 });
 
 // ------------------------------------------------------- modais das salas

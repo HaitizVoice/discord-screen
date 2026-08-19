@@ -23,6 +23,40 @@ const token = query.get('t');
 const FONTES = ['tela', 'camera'];
 const TITULO = document.title;
 
+/**
+ * As opções da transmissão, decididas na engrenagem da atividade.
+ *
+ * Chegam pela URL quando esta aba é aberta e podem ser trocadas depois, pelo
+ * `start-request` — a aba costuma estar aberta desde antes da última mexida.
+ * Não há controle aqui: dois lugares para a mesma escolha significam um deles
+ * desatualizado, e o que fica velho é sempre o que não foi usado por último.
+ */
+const opcoes = {
+  bitrate: Number(query.get('q')) || 2_500_000,
+  fps: Number(query.get('fps')) || 30,
+  som: query.get('som') === '1',
+};
+
+function aplicarOpcoes(novas) {
+  if (!novas) return;
+  if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
+  if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
+  if (novas.som !== undefined) opcoes.som = novas.som === '1';
+  mostrarOpcoes();
+}
+
+function mostrarOpcoes() {
+  const mbps = (opcoes.bitrate / 1e6).toFixed(1).replace('.', ',');
+  $('presetLine').textContent =
+    `${mbps} Mb/s · ${opcoes.fps} fps${opcoes.som ? ' · com som' : ' · sem som'}`;
+
+  // A nota da tela acompanha: com som ela explica a caixa que o navegador
+  // mostra; sem som, diz onde ligar, que já não é aqui.
+  $('tela-nota').textContent = opcoes.som
+    ? 'Marque também "Compartilhar o áudio" na janela que o navegador abrir — sem isso ele entrega a tela sem som.'
+    : 'Esta transmissão vai sem som. Para ligar, use a engrenagem na atividade do Discord.';
+}
+
 const paineis = {};
 
 function readTokenPayload() {
@@ -90,12 +124,76 @@ document.addEventListener('visibilitychange', () => {
  * ativação transitória e lança InvalidStateError sem ela, então o seletor só
  * abre a partir de um clique nesta página. O que resta é chamar e esperar.
  */
-function atenderPedido(fonte) {
+/**
+ * A configuração mudou na engrenagem da atividade.
+ *
+ * Vale na hora para o que já está no ar — menos o som, que é decidido no
+ * momento da captura e só mudaria escolhendo a tela de novo.
+ */
+function aplicarConfig(novas) {
+  aplicarOpcoes(novas);
+  for (const f of FONTES) paineis[f]?.aplicarQualidade();
+}
+
+function atenderPedido(fonte, novas) {
+  aplicarOpcoes(novas);
+
   const painel = paineis[fonte];
   if (!painel || painel.ativo()) return;
 
   chamar(fonte);
   if (fonte === 'camera') painel.ligar();
+}
+
+// --------------------------------------------------------------- controle
+
+/**
+ * Conexão de controle: aberta ao carregar, viva enquanto esta aba estiver.
+ *
+ * É por ela que a atividade alcança esta página **antes** de existir qualquer
+ * transmissão — para pedir uma fonte, ou para avisar que a configuração mudou.
+ * As conexões de transmissão não serviriam: cada uma nasce só depois que a
+ * captura foi concedida, então com nada no ar não há ninguém escutando.
+ */
+let controle = null;
+let religar = null;
+
+function ligarControle() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  controle = new WebSocket(
+    `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&modo=controle`
+  );
+
+  controle.addEventListener('message', (e) => {
+    if (typeof e.data !== 'string') return;
+
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+
+    if (msg.type === 'start-request') atenderPedido(msg.fonte, msg.opcoes);
+    else if (msg.type === 'config-request') aplicarConfig(msg.opcoes);
+    else if (msg.type === 'room-gone') {
+      // Sala fechada: não há a quem transmitir, e insistir na reconexão só
+      // gastaria rede contra um id que não existe mais.
+      clearTimeout(religar);
+      religar = 'morto';
+      $('pageStatus').textContent = 'A sala foi fechada. Volte à atividade e comece de novo.';
+      $('pageStatus').className = 'status aviso';
+    }
+  });
+
+  // Sem reconectar, uma queda de rede deixa a aba aberta e surda, sem nada na
+  // tela dizendo que ela parou de obedecer à atividade.
+  controle.addEventListener('close', () => {
+    controle = null;
+    if (religar === 'morto') return;
+    clearTimeout(religar);
+    religar = setTimeout(ligarControle, 3000);
+  });
 }
 
 // ------------------------------------------------------------------ painel
@@ -123,7 +221,7 @@ function criarPainel(fonte) {
    * sem este aviso a pessoa escolhe 60, recebe 35 e não fica sabendo.
    */
   function conferirRitmo({ fps, seconds }) {
-    const alvo = Number($('fps').value);
+    const alvo = opcoes.fps;
     if (ritmoAvisado || seconds < 4) return;
 
     curtas = fps < alvo * 0.7 ? curtas + 1 : 0;
@@ -158,9 +256,9 @@ function criarPainel(fonte) {
 
     broadcaster = createBroadcaster({
       wsUrl: `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&fonte=${fonte}`,
-      bitrate: Number($('quality').value),
-      fps: Number($('fps').value),
-      audio: !camera && $('withAudio').checked,
+      bitrate: opcoes.bitrate,
+      fps: opcoes.fps,
+      audio: !camera && opcoes.som,
       fonte,
       onStatus: (s) =>
         setStatus(
@@ -184,9 +282,6 @@ function criarPainel(fonte) {
         mostrarSetup();
         setStatus(reason);
       },
-      // O pedido chega por qualquer conexão viva; quem resolve é o painel da
-      // fonte pedida, que pode não ser este.
-      onPedido: atenderPedido,
     });
 
     try {
@@ -216,6 +311,7 @@ function criarPainel(fonte) {
   return {
     ligar,
     setStatus,
+    aplicarQualidade: () => broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps }),
     ativo: () => Boolean(broadcaster),
     parar: () => broadcaster?.stop(),
     trocarSom: () => broadcaster?.trocarSom(),
@@ -237,9 +333,10 @@ if (!payload) {
   falhar('Navegador sem suporte.', missing);
 } else {
   $('roomLine').textContent = `Transmitindo como ${payload.name}`;
-  applyPresets();
+  mostrarOpcoes();
 
   for (const f of FONTES) paineis[f] = criarPainel(f);
+  ligarControle();
 
   // A atividade diz qual fonte motivou a abertura da aba. A tela espera o
   // clique; a câmera pode subir sozinha, mas só depois que a página apareceu —
@@ -247,37 +344,6 @@ if (!payload) {
   // deixaria o pedido preso sem ninguém ver.
   const pedida = query.get('fonte');
   if (FONTES.includes(pedida)) atenderPedido(pedida);
-}
-
-/**
- * Aplica as opções escolhidas no modal da Activity, que chegam pela URL.
- *
- * Com elas definidas, os seletores saem de cena: repetir a mesma escolha aqui
- * só confundiria. Sem elas, a página segue mostrando os controles.
- */
-function applyPresets() {
-  const q = query.get('q');
-  const fps = query.get('fps');
-  const som = query.get('som');
-
-  // O que vem da atividade é ponto de partida, não decisão final: a caixa fica
-  // à vista. Ela sumia enquanto esta página só existia para o primeiro clique
-  // — agora a tela também nasce daqui, com a aba já aberta, e aí a escolha do
-  // som feita lá atrás pode não ser a que se quer agora.
-  if (som !== null) $('withAudio').checked = som === '1';
-
-  if (!q && !fps) return;
-
-  if (q) $('quality').value = q;
-  if (fps) $('fps').value = fps;
-
-  for (const row of document.querySelectorAll('#setup .row')) row.hidden = true;
-
-  // Sem " · com som": a caixa está à vista e pode ser trocada, então repetir o
-  // estado dela aqui só criaria um rótulo que envelhece no primeiro clique.
-  const mbps = (Number($('quality').value) / 1e6).toFixed(1).replace('.', ',');
-  $('presetLine').textContent = `${mbps} Mb/s · ${$('fps').value} fps`;
-  $('presetLine').hidden = false;
 }
 
 // Mantém o vídeo como está e troca só de onde vem o som — a única fonte que

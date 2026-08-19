@@ -8,7 +8,7 @@
          dos cabeçalhos no-store guardou a versão antiga por heurística do
          navegador, e continuaria usando ela para sempre. Trocar a query força
          uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=13" />
+    <link rel="stylesheet" href="/share.css?v=14" />
   </head>
   <body>
     <main class="card">
@@ -21,30 +21,12 @@
            suporte. Os erros de cada fonte ficam no bloco dela. -->
       <p id="pageStatus" class="status" role="status"></p>
 
-      <!-- Qualidade e taxa valem para a próxima fonte que você ligar: são a
-           mesma escolha para as duas, e repeti-las em cada bloco só faria a
-           página perguntar duas vezes o que se responde uma. -->
+      <!-- Só o resumo: qualidade, taxa e som são editados pela engrenagem da
+           atividade, que é de onde esta página é aberta. Os mesmos controles
+           nos dois lugares criavam duas fontes de verdade, e a daqui
+           envelhecia assim que alguém mexia na de lá. -->
       <section id="setup">
-        <div class="row">
-          <label for="quality">Qualidade</label>
-          <select id="quality">
-            <option value="1000000">Leve — 1 Mbps</option>
-            <option value="2500000" selected>Boa — 2,5 Mbps</option>
-            <option value="5000000">Alta — 5 Mbps</option>
-            <option value="8000000">Máxima — 8 Mbps</option>
-          </select>
-        </div>
-
-        <div class="row">
-          <label for="fps">Taxa de quadros</label>
-          <select id="fps">
-            <option value="15">15 fps — economiza banda</option>
-            <option value="30" selected>30 fps — mais fluido</option>
-            <option value="60">60 fps — jogo e vídeo, exija 5 Mbps ou mais</option>
-          </select>
-        </div>
-
-        <p id="presetLine" class="preset" hidden></p>
+        <p id="presetLine" class="preset"></p>
       </section>
 
       <div class="fontes">
@@ -52,15 +34,7 @@
           <h2>Tela</h2>
 
           <div id="tela-setup">
-            <label class="check">
-              <input id="withAudio" type="checkbox" />
-              <span>Compartilhar o som do computador</span>
-            </label>
-
-            <p class="note">
-              Marque também "Compartilhar o áudio" na janela que o navegador abrir — sem isso
-              ele entrega a tela sem som.
-            </p>
+            <p class="note" id="tela-nota"></p>
 
             <button id="tela-start" class="primary">Escolher tela e transmitir</button>
           </div>
@@ -113,6 +87,6 @@
       </footer>
     </main>
 
-    <script type="module" src="/share.js?v=13"></script>
+    <script type="module" src="/share.js?v=14"></script>
   </body>
 </html>

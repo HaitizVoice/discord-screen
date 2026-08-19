@@ -599,13 +599,15 @@ server.on('upgrade', (req, socket, head) => {
   // por pessoa é imposto no registro, não aqui.
   const pedida = url.searchParams.get('fonte');
   const fonte = R.FONTES.has(pedida) ? pedida : 'tela';
+  // A aba de captura abre esta conexão ao carregar, antes de qualquer captura.
+  const controle = url.searchParams.get('modo') === 'controle';
 
   wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req, payload, fonte);
+    wss.emit('connection', ws, req, payload, fonte, controle);
   });
 });
 
-wss.on('connection', (ws, _req, auth, fonte) => {
+wss.on('connection', (ws, _req, auth, fonte, controle) => {
   const room = R.getRoom(auth.room);
 
   // A sala pode ter fechado entre a emissão do token e a conexão.
@@ -615,12 +617,36 @@ wss.on('connection', (ws, _req, auth, fonte) => {
     return;
   }
 
-  if (auth.role === 'broadcaster') {
+  if (auth.role === 'broadcaster' && controle) {
+    handleControl(ws, room, auth);
+  } else if (auth.role === 'broadcaster') {
     handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null }, fonte);
   } else {
     handleViewer(ws, room, auth);
   }
 });
+
+/**
+ * A aba de captura, sem mídia nenhuma: só recebe recados.
+ *
+ * Ela não transmite por aqui — quando começa, abre uma conexão de transmissão
+ * separada, uma por fonte. Esta serve para a atividade alcançá-la enquanto
+ * ainda não há nada no ar, que é justamente quando o `broadcastersOf` não
+ * encontraria ninguém.
+ */
+function handleControl(ws, room, auth) {
+  R.attachControl(room, ws, auth.uid);
+  console.log(`[room ${room.id}] aba de captura de ${auth.name} conectada`);
+
+  R.broadcastState(room);
+
+  const sair = () => {
+    R.detachControl(room, ws);
+    R.broadcastState(room);
+  };
+  ws.on('close', sair);
+  ws.on('error', sair);
+}
 
 function handleBroadcaster(ws, room, info, fonte) {
   const entry = R.attachBroadcaster(room, ws, info, fonte);
@@ -705,9 +731,21 @@ function handleViewer(ws, room, auth) {
     // tem uma aba conectada, e é ela que consegue capturar. A atividade só
     // pede; a aba decide o que dá para fazer sem gesto (câmera dá, tela não).
     if (msg.type === 'start-broadcast' && R.FONTES.has(msg.fonte)) {
-      const abas = R.broadcastersOf(room, auth.uid).filter((e) => e.fonte !== msg.fonte);
-      for (const entry of abas) R.sendJson(entry.ws, { type: 'start-request', fonte: msg.fonte });
-      if (abas.length) console.log(`[room ${room.id}] ${auth.name} pediu ${msg.fonte} à própria aba`);
+      // Vai para a aba, e não para as conexões de transmissão: é ela quem tem o
+      // gesto do usuário e a permissão, e ela existe mesmo com nada no ar.
+      const n = R.toControls(room, auth.uid, {
+        type: 'start-request',
+        fonte: msg.fonte,
+        opcoes: msg.opcoes,
+      });
+      if (n) console.log(`[room ${room.id}] ${auth.name} pediu ${msg.fonte} à própria aba`);
+      return;
+    }
+
+    // Configuração trocada na engrenagem. Chega à aba na hora, sem esperar o
+    // próximo início: era o que fazia o resumo dela envelhecer em silêncio.
+    if (msg.type === 'config-broadcast' && msg.opcoes) {
+      R.toControls(room, auth.uid, { type: 'config-request', opcoes: msg.opcoes });
       return;
     }
 

@@ -77,7 +77,6 @@ export function supportError({ requireChromium = false, fonte = 'tela' } = {}) {
  * @param {(stats:object)=>void} [opts.onStats]  viewers, fps, mbps, segundos no ar
  * @param {(reason:string)=>void} [opts.onEnd]   encerrou (por qualquer motivo)
  * @param {(msg:string)=>void} [opts.onAviso]    algo mudou sem ser erro
- * @param {(fonte:string)=>void} [opts.onPedido]  a atividade pediu outra fonte
  * @param {(msg:string)=>void} [opts.onError]
  */
 export function createBroadcaster({
@@ -91,7 +90,6 @@ export function createBroadcaster({
   onEnd,
   onError,
   onAviso,
-  onPedido,
 }) {
   let ws = null;
   let stream = null;
@@ -642,9 +640,6 @@ export function createBroadcaster({
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
         else if (msg.type === 'stop-request') stop('Transmissão encerrada pela atividade.');
-        // A atividade não tem como capturar: quem tem o gesto do usuário e a
-        // permissão é esta aba. Ela pede, aqui se resolve.
-        else if (msg.type === 'start-request') onPedido?.(msg.fonte);
         else if (msg.type === 'error') {
           if (running) stop(msg.message);
           else {

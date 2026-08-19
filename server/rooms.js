@@ -64,6 +64,37 @@ export function broadcastersOf(room, userId, fonte = null) {
 
 const transmitindo = (room, userId) => broadcastersOf(room, userId).length > 0;
 
+/**
+ * A aba de captura, ligada desde que carrega e antes de qualquer transmissão.
+ *
+ * Existe porque a atividade precisa falar com ela justamente quando não há nada
+ * no ar: mudar a qualidade, ou pedir a tela — que só nasce de um clique lá. A
+ * conexão de transmissão não serve para isso, porque só é aberta depois que a
+ * captura foi concedida.
+ *
+ * Não ocupa slot, não entra na contagem de pessoas e não segura a sala de pé:
+ * uma aba esquecida aberta não pode manter viva uma sala que todo mundo já
+ * deixou.
+ */
+export function attachControl(room, ws, userId) {
+  ws.__controlOf = userId;
+  room.controles.add(ws);
+}
+
+export function detachControl(room, ws) {
+  room.controles.delete(ws);
+}
+
+/** Manda um recado para as abas de captura de uma pessoa. */
+export function toControls(room, userId, obj) {
+  let entregues = 0;
+  for (const ws of room.controles) {
+    if (ws.__controlOf !== userId) continue;
+    if (sendJson(ws, obj)) entregues++;
+  }
+  return entregues;
+}
+
 // ------------------------------------------------------------------- senha
 
 function hashPassword(password, salt = crypto.randomBytes(16)) {
@@ -154,6 +185,7 @@ export function createRoom({ instance, name, ownerId, ownerName, password }) {
     broadcasters: new Map(),
     slots: new Map(),
     viewers: new Set(),
+    controles: new Set(),
     droppedChunks: 0,
   };
 
@@ -193,6 +225,7 @@ export function ensureCallRoom(instance, id) {
     broadcasters: new Map(),
     slots: new Map(),
     viewers: new Set(),
+    controles: new Set(),
     droppedChunks: 0,
   };
 
@@ -321,8 +354,14 @@ function roomState(room) {
 
   participants.sort((a, b) => Number(b.broadcasting) - Number(a.broadcasting));
 
+  // Quem tem aba de captura aberta. É o que permite à atividade saber se pode
+  // falar com ela em vez de abrir outra — antes isso era deduzido do que estava
+  // no ar, e uma aba ainda parada não aparecia em lugar nenhum.
+  const abas = [...new Set([...room.controles].map((ws) => ws.__controlOf))];
+
   return {
     type: 'state',
+    abas,
     room: { id: room.id, name: room.name, ownerId: room.ownerId, locked: Boolean(room.password) },
     broadcasting: room.broadcasters.size > 0,
     viewers: room.viewers.size,

@@ -365,16 +365,30 @@ function criarPainel(fonte) {
     );
   }
 
+  /**
+   * Abre o menu de câmeras.
+   *
+   * Lista sem pedir a câmera: `enumerateDevices` responde sem permissão — só
+   * devolve os nomes em branco, e uma lista de "Câmera 1, Câmera 2" já deixa
+   * escolher. Exigir a permissão antes acorrentava o menu ao sucesso do
+   * `getUserMedia`: bastava a câmera estar ocupada por outro programa para a
+   * seta parar de responder, sem nada explicando por quê.
+   *
+   * Os nomes de verdade chegam depois da primeira prévia, e a próxima abertura
+   * do menu já os mostra.
+   */
   async function escolher() {
     if (!camera) return verTela();
 
     if (!el('menu').hidden) return fecharMenu();
 
-    if (!previa) await verCamera();
-    else await listarCameras();
+    await listarCameras();
 
-    // Sem câmera nenhuma não há menu a abrir; o status já explicou.
-    if (!el('menu').childElementCount) return;
+    if (!el('menu').childElementCount) {
+      setStatus('Nenhuma câmera encontrada neste computador.', 'error');
+      return;
+    }
+
     el('menu').hidden = false;
     el('escolher').setAttribute('aria-expanded', 'true');
   }
@@ -463,7 +477,7 @@ function criarPainel(fonte) {
   // de abrir.
   el('escolher').addEventListener('click', (e) => {
     e.stopPropagation();
-    escolher();
+    escolher().catch((err) => setStatus(err.message, 'error'));
   });
 
   if (camera) {

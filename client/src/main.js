@@ -1607,14 +1607,38 @@ $('share').addEventListener('click', () => {
  */
 let modalMode = 'start';
 const BROADCAST_FPS_KEY = 'broadcastFps';
+const BROADCAST_BITRATE_KEY = 'broadcastBitrate';
 
-function applySavedBroadcastFps() {
-  const fps = read(BROADCAST_FPS_KEY);
-  if (fps && selectHasValue($('mFps'), fps)) $('mFps').value = fps;
+/**
+ * Devolve ao modal as escolhas da última transmissão.
+ *
+ * Os dois seletores andam juntos: lembrar a taxa de quadros e esquecer a
+ * qualidade deixaria metade do formulário obedecendo o que a pessoa escolheu e
+ * a outra metade voltando ao padrão, sem nada na tela explicando a diferença.
+ *
+ * Cada valor é conferido contra as opções antes de entrar. Um valor órfão — de
+ * quando as opções eram outras — não dá erro ao ser atribuído: o select fica
+ * em branco, calado, e o Number() disso vira NaN na hora de transmitir.
+ */
+function applySavedBroadcastPrefs() {
+  aplicarSalvo($('mFps'), BROADCAST_FPS_KEY);
+  aplicarSalvo($('mQuality'), BROADCAST_BITRATE_KEY);
 }
 
-function saveBroadcastFps() {
+function aplicarSalvo(select, chave) {
+  const valor = read(chave);
+  if (valor && selectHasValue(select, valor)) select.value = valor;
+}
+
+/**
+ * Guarda o que a pessoa usou de verdade.
+ *
+ * Chamado depois de a captura começar, e não quando o modal abre: quem escolhe
+ * 60 fps e desiste no seletor do navegador não escolheu nada.
+ */
+function saveBroadcastPrefs() {
   store(BROADCAST_FPS_KEY, $('mFps').value);
+  store(BROADCAST_BITRATE_KEY, $('mQuality').value);
 }
 
 function openModal(mode) {
@@ -1639,7 +1663,7 @@ function openModal(mode) {
     $('mQuality').value = String(s.bitrate);
     $('mFps').value = String(s.fps);
   } else {
-    applySavedBroadcastFps();
+    applySavedBroadcastPrefs();
   }
 
   $('modal').hidden = false;
@@ -1739,7 +1763,7 @@ async function broadcastFromHere() {
   const startedAt = performance.now();
   try {
     await b.start();
-    saveBroadcastFps();
+    saveBroadcastPrefs();
     myBroadcast = b;
     closeModal();
     renderBar();
@@ -1768,7 +1792,7 @@ $('modalGo').addEventListener('click', async () => {
       bitrate: Number($('mQuality').value),
       fps: Number($('mFps').value),
     });
-    saveBroadcastFps();
+    saveBroadcastPrefs();
     closeModal();
     return;
   }
@@ -1779,7 +1803,7 @@ $('modalGo').addEventListener('click', async () => {
   if (await broadcastFromHere()) return;
 
   closeModal();
-  saveBroadcastFps();
+  saveBroadcastPrefs();
 
   // As opções seguem na URL: a página de captura já abre configurada, sem
   // pedir as mesmas escolhas de novo.

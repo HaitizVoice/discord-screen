@@ -14,7 +14,10 @@ const $ = (id) => document.getElementById(id);
 
 const query = new URLSearchParams(location.search);
 const token = query.get('t');
+// As mesmas chaves que a Activity usa: quem escolhe 60 fps lá dentro e cai
+// para esta página não deveria ter que escolher de novo.
 const BROADCAST_FPS_KEY = 'broadcastFps';
+const BROADCAST_BITRATE_KEY = 'broadcastBitrate';
 
 let broadcaster = null;
 
@@ -120,7 +123,10 @@ function applyPresets() {
   const fps = query.get('fps');
   const som = query.get('som');
 
+  // A preferência primeiro, os parâmetros da URL logo abaixo: o que a
+  // atividade mandou é escolha desta transmissão e vence o que foi lembrado.
   setSelectValue($('fps'), read(BROADCAST_FPS_KEY));
+  setSelectValue($('quality'), read(BROADCAST_BITRATE_KEY));
 
   // A opção de som veio decidida da atividade, então a caixa some junto com os
   // seletores — repetir a mesma escolha aqui só confundiria.
@@ -131,7 +137,7 @@ function applyPresets() {
 
   if (!q && !fps) return;
 
-  if (q) $('quality').value = q;
+  setSelectValue($('quality'), q);
   setSelectValue($('fps'), fps);
 
   for (const row of document.querySelectorAll('#setup .row')) row.hidden = true;
@@ -187,6 +193,7 @@ async function start() {
   try {
     const stream = await broadcaster.start();
     store(BROADCAST_FPS_KEY, $('fps').value);
+    store(BROADCAST_BITRATE_KEY, $('quality').value);
     $('preview').srcObject = stream;
     $('preview').play().catch(() => {});
     $('setup').hidden = true;

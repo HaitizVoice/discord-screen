@@ -9,7 +9,7 @@ import { WebSocketServer } from 'ws';
 
 import { signToken, verifyToken } from './tokens.js';
 import * as R from './rooms.js';
-import { systemSnapshot } from './system.js';
+import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -47,10 +47,23 @@ if (ADMIN_ID && !process.env.SESSION_SECRET) {
   process.exit(1);
 }
 
+// O painel inteiro se apoia num cookie assinado com este segredo. Um segredo
+// curto é adivinhável fora daqui, sem deixar rastro no servidor: quem acertar
+// forja o cookie e entra como dono. O comando de configuração gera 64
+// caracteres; este piso só barra quem editou o .env na mão e pôs qualquer coisa.
+if (ADMIN_ID && process.env.SESSION_SECRET.length < 32) {
+  console.error('ERRO: SESSION_SECRET curto demais para o painel admin (minimo 32 caracteres).');
+  console.error('      Rode "npm run configurar" para gerar um seguro.');
+  process.exit(1);
+}
+
 if (ADMIN_ID && !/^[0-9]{15,21}$/.test(ADMIN_ID)) {
   console.error('ERRO: DISCORD_ADMIN_ID invalido. Use o ID numerico da sua conta Discord.');
   process.exit(1);
 }
+
+// Sem painel, ninguém lê as métricas — então nem começa a medir.
+if (ADMIN_ID) startSampling();
 
 const app = express();
 app.use(express.json());
@@ -251,31 +264,40 @@ function issueIdentity(instance, uid, name, avatar, ttl = 8 * 60 * 60, extra = {
   };
 }
 
-const guildNameCache = new Map();
+const guildCache = new Map();
 
-/** Resolve o nome sem ampliar os escopos OAuth; quando o bot nao estiver no
- * servidor, o dashboard continua funcional e mostra o guild ID. */
+/**
+ * O nome de um servidor, pelo bot.
+ *
+ * Sem ampliar escopo de OAuth: quando o bot não está no servidor, o painel
+ * continua funcional e mostra o ID no lugar do nome.
+ *
+ * Cache de uma hora. O painel se atualiza de 2 em 2 segundos, e sem cache isso
+ * viraria uma chamada por servidor a cada volta.
+ */
 async function resolveGuildName(guildId) {
   if (!DISCORD_BOT_TOKEN || !guildId) return null;
 
-  const cached = guildNameCache.get(guildId);
+  const cached = guildCache.get(guildId);
   if (cached && cached.expiresAt > Date.now()) return cached.name;
 
+  let name = null;
   try {
     const response = await fetch(`https://discord.com/api/v10/guilds/${guildId}`, {
       headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` },
       signal: AbortSignal.timeout(5000),
     });
     const guild = response.ok ? await response.json() : null;
-    const name = typeof guild?.name === 'string' ? guild.name : null;
-    guildNameCache.set(guildId, {
-      name,
-      expiresAt: Date.now() + (name ? 60 * 60 * 1000 : 10 * 60 * 1000),
-    });
-    return name;
+    if (typeof guild?.name === 'string') name = guild.name;
   } catch {
-    return null;
+    name = null;
   }
+
+  guildCache.set(guildId, {
+    name,
+    expiresAt: Date.now() + (name ? 60 * 60 * 1000 : 10 * 60 * 1000),
+  });
+  return name;
 }
 
 /**

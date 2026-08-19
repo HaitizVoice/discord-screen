@@ -219,8 +219,22 @@ function sample() {
   previousNetwork = network;
 }
 
-const sampler = setInterval(sample, 1000);
-sampler.unref?.();
+let sampler = null;
+
+/**
+ * Liga a amostragem periódica. Só quem abre o painel precisa dela.
+ *
+ * Antes o intervalo subia junto com o import, e todo mundo que roda o programa
+ * pagava um timer de 1 em 1 segundo — lendo /proc e varrendo os núcleos — por
+ * um painel que, sem DISCORD_ADMIN_ID, nem liga. Quem não usa não paga.
+ *
+ * unref para o timer não segurar o processo de pé no encerramento.
+ */
+export function startSampling() {
+  if (sampler) return;
+  sampler = setInterval(sample, 1000);
+  sampler.unref?.();
+}
 
 export function systemSnapshot() {
   return cached;

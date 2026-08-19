@@ -81,7 +81,9 @@ try {
   check(!('rooms' in health), 'healthcheck publico nao expoe salas');
 
   const page = await fetch(`${base}/admin`).then((response) => response.text());
-  check(page.includes('Painel administrativo'), 'pagina administrativa e servida');
+  // Marcador estrutural, nao a copy: o teste prova que a casca do painel foi
+  // servida. Preso a uma frase de tela, ele quebrava a cada ajuste de texto.
+  check(page.includes('id="dashboard"'), 'pagina administrativa e servida');
 
   const login = await fetch(`${base}/admin/auth/login`, { redirect: 'manual' });
   const loginUrl = new URL(login.headers.get('location'));

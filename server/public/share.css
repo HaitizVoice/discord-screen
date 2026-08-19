@@ -243,6 +243,31 @@ video {
   .bloco > div > button.danger {
     margin-top: auto;
   }
+
+  .sem-preview {
+    display: flex;
+  }
+}
+
+/* O lugar do preview enquanto não há preview.
+
+   Só existe lado a lado: empilhado, uma caixa vazia do tamanho de um vídeo
+   empurraria a outra fonte para fora da tela, que é justamente o que o layout
+   de duas colunas foi feito para evitar. Em duas colunas ela é o contrário —
+   sem ela a coluna parada fica com um vão do tamanho do vídeo da outra, e as
+   duas ações, que são o mesmo gesto, desencontram na vertical. */
+.sem-preview {
+  display: none;
+  flex: 0 0 auto;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px dashed var(--line);
+  background: #1a1b1e;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 /* Um bloco por fonte. A régua acima separa sem gastar altura, que é o que

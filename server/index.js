@@ -593,12 +593,19 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
 
+  // A fonte não vai assinada, como `q`, `fps` e `som` também não vão: ela não
+  // concede nada. Quem tem o token já pode transmitir nesta sala — a fonte só
+  // rotula o stream e escolhe qual das duas vagas da pessoa é ocupada, e o teto
+  // por pessoa é imposto no registro, não aqui.
+  const pedida = url.searchParams.get('fonte');
+  const fonte = R.FONTES.has(pedida) ? pedida : 'tela';
+
   wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req, payload);
+    wss.emit('connection', ws, req, payload, fonte);
   });
 });
 
-wss.on('connection', (ws, _req, auth) => {
+wss.on('connection', (ws, _req, auth, fonte) => {
   const room = R.getRoom(auth.room);
 
   // A sala pode ter fechado entre a emissão do token e a conexão.
@@ -609,14 +616,14 @@ wss.on('connection', (ws, _req, auth) => {
   }
 
   if (auth.role === 'broadcaster') {
-    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null });
+    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null }, fonte);
   } else {
     handleViewer(ws, room, auth);
   }
 });
 
-function handleBroadcaster(ws, room, info) {
-  const entry = R.attachBroadcaster(room, ws, info);
+function handleBroadcaster(ws, room, info, fonte) {
+  const entry = R.attachBroadcaster(room, ws, info, fonte);
 
   if (typeof entry === 'string') {
     R.sendJson(ws, { type: 'error', message: entry });
@@ -624,7 +631,9 @@ function handleBroadcaster(ws, room, info) {
     return;
   }
 
-  console.log(`[room ${room.id}] broadcaster conectado: ${info.name} (slot ${entry.slot})`);
+  console.log(
+    `[room ${room.id}] broadcaster conectado: ${info.name} · ${fonte} (slot ${entry.slot})`
+  );
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) {
@@ -692,11 +701,27 @@ function handleViewer(ws, room, auth) {
 
     // Encerrar a própria transmissão de dentro da Activity, sem ter que achar
     // a aba de captura. Cada um só encerra a sua.
+    // Ligar a outra fonte sem abrir uma segunda aba: quem já está transmitindo
+    // tem uma aba conectada, e é ela que consegue capturar. A atividade só
+    // pede; a aba decide o que dá para fazer sem gesto (câmera dá, tela não).
+    if (msg.type === 'start-broadcast' && R.FONTES.has(msg.fonte)) {
+      const abas = R.broadcastersOf(room, auth.uid).filter((e) => e.fonte !== msg.fonte);
+      for (const entry of abas) R.sendJson(entry.ws, { type: 'start-request', fonte: msg.fonte });
+      if (abas.length) console.log(`[room ${room.id}] ${auth.name} pediu ${msg.fonte} à própria aba`);
+      return;
+    }
+
     if (msg.type === 'stop-broadcast') {
-      const entry = R.broadcasterOf(room, auth.uid);
-      if (entry) {
-        R.sendJson(entry.ws, { type: 'stop-request' });
-        console.log(`[room ${room.id}] parada pedida por ${auth.name}`);
+      // Sem fonte, para tudo o que a pessoa estiver transmitindo. É o que o
+      // botão da barra sempre fez, e continua valendo para quem só tem uma.
+      const fonte = R.FONTES.has(msg.fonte) ? msg.fonte : null;
+      const alvos = R.broadcastersOf(room, auth.uid, fonte);
+
+      for (const entry of alvos) R.sendJson(entry.ws, { type: 'stop-request' });
+      if (alvos.length) {
+        console.log(
+          `[room ${room.id}] parada pedida por ${auth.name}: ${alvos.map((e) => e.fonte).join(', ')}`
+        );
       }
     }
   });

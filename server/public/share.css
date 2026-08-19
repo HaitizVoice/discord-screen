@@ -199,6 +199,34 @@ video {
   font-size: 12px;
 }
 
+/* Um bloco por fonte. A régua acima separa sem gastar altura, que é o que
+   falta numa página que agora tem dois controles em vez de um. */
+.bloco {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.bloco h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+
+/* O bloco da fonte pedida pela atividade, enquanto ela espera um clique daqui.
+   Sem isto o pedido chega e nada na página muda de aparência. */
+.bloco.chamando {
+  border-top-color: var(--accent, #5865f2);
+}
+
+.bloco.chamando h2 {
+  opacity: 1;
+  color: var(--accent, #5865f2);
+}
+
 .status {
   margin: 16px 0 0;
   min-height: 20px;

@@ -17,6 +17,12 @@
 import crypto from 'node:crypto';
 
 const MAX_BROADCASTERS = 4;
+// Duas por pessoa: a tela e a câmera. O teto da sala continua valendo por cima,
+// então duas pessoas com as duas fontes já lotam.
+const MAX_POR_PESSOA = 2;
+
+/** As fontes que uma transmissão pode ter. */
+export const FONTES = new Set(['tela', 'camera']);
 // Sala é objeto em memória criado por qualquer pessoa autenticada: sem teto,
 // um laço de "criar sala" consome a RAM do processo.
 const MAX_ROOMS_PER_INSTANCE = 20;
@@ -43,6 +49,20 @@ const KEYFRAME = 1;
 const AUDIO = 3;
 
 const rooms = new Map();
+
+// Uma pessoa pode ter duas transmissões ao mesmo tempo, então o uid sozinho não
+// identifica mais uma delas. A chave composta mantém o acesso direto que o
+// registro sempre teve, sem virar um Map de Maps.
+const chaveDe = (uid, fonte) => `${uid}|${fonte}`;
+
+/** As transmissões de uma pessoa, de uma fonte só quando `fonte` vem. */
+export function broadcastersOf(room, userId, fonte = null) {
+  return [...room.broadcasters.values()].filter(
+    (e) => e.info.id === userId && (!fonte || e.fonte === fonte)
+  );
+}
+
+const transmitindo = (room, userId) => broadcastersOf(room, userId).length > 0;
 
 // ------------------------------------------------------------------- senha
 
@@ -205,7 +225,7 @@ export function listRooms(instance) {
 function countPeople(room) {
   const ids = new Set();
   for (const v of room.viewers) if (v.__info) ids.add(v.__info.id);
-  for (const uid of room.broadcasters.keys()) ids.add(uid);
+  for (const e of room.broadcasters.values()) ids.add(e.info.id);
   return ids.size;
 }
 
@@ -281,15 +301,18 @@ function roomState(room) {
     id: info.id,
     name: info.name,
     avatar: info.avatar ?? null,
-    broadcasting: room.broadcasters.has(info.id),
+    broadcasting: transmitindo(room, info.id),
   }));
 
   // Quem transmite pode ter fechado a aba da Activity: continua na lista,
-  // senão o vídeo fica sem dono visível.
-  for (const [uid, entry] of room.broadcasters) {
-    if (byId.has(uid)) continue;
+  // senão o vídeo fica sem dono visível. O `vistos` importa agora que a mesma
+  // pessoa pode ter duas transmissões — sem ele, apareceria duplicada.
+  const vistos = new Set(byId.keys());
+  for (const entry of room.broadcasters.values()) {
+    if (vistos.has(entry.info.id)) continue;
+    vistos.add(entry.info.id);
     participants.push({
-      id: uid,
+      id: entry.info.id,
       name: entry.info.name,
       avatar: entry.info.avatar ?? null,
       broadcasting: true,
@@ -306,7 +329,12 @@ function roomState(room) {
     participants,
     streams: [...room.broadcasters.values()]
       .filter((e) => e.streaming)
-      .map((e) => ({ slot: e.slot, userId: e.info.id, watchers: watchersOf(room, e.slot) })),
+      .map((e) => ({
+        slot: e.slot,
+        userId: e.info.id,
+        fonte: e.fonte,
+        watchers: watchersOf(room, e.slot),
+      })),
   };
 }
 
@@ -327,8 +355,9 @@ export function rename(room, ws, raw) {
   if (!name) return;
 
   ws.__info.name = name;
-  const entry = room.broadcasters.get(ws.__info.id);
-  if (entry) entry.info.name = name;
+  // Todas as transmissões da pessoa, não "a" transmissão: quem divide tela e
+  // câmera tem duas, e renomear só uma deixaria o grid com dois nomes.
+  for (const entry of broadcastersOf(room, ws.__info.id)) entry.info.name = name;
   broadcastState(room);
 }
 
@@ -342,8 +371,19 @@ function freeSlot(room) {
 }
 
 /** Retorna a entry criada, ou uma string com o motivo da recusa. */
-export function attachBroadcaster(room, ws, info) {
-  if (room.broadcasters.has(info.id)) return 'Você já está transmitindo nesta sala.';
+export function attachBroadcaster(room, ws, info, fonte = 'tela') {
+  const chave = chaveDe(info.id, fonte);
+
+  // A recusa nomeia a fonte: "você já está transmitindo" era claro quando só
+  // havia uma, mas com duas deixaria a pessoa sem saber qual delas repetiu.
+  if (room.broadcasters.has(chave)) {
+    return fonte === 'camera'
+      ? 'Você já está transmitindo a câmera nesta sala.'
+      : 'Você já está transmitindo a tela nesta sala.';
+  }
+  if (broadcastersOf(room, info.id).length >= MAX_POR_PESSOA) {
+    return `Limite de ${MAX_POR_PESSOA} transmissões por pessoa atingido.`;
+  }
   if (room.broadcasters.size >= MAX_BROADCASTERS) {
     return `Limite de ${MAX_BROADCASTERS} transmissões simultâneas atingido.`;
   }
@@ -351,8 +391,17 @@ export function attachBroadcaster(room, ws, info) {
   const slot = freeSlot(room);
   if (slot === null) return 'Sem espaço para mais transmissões.';
 
-  const entry = { ws, info, slot, streaming: false, config: null, audioConfig: null };
-  room.broadcasters.set(info.id, entry);
+  const entry = {
+    ws,
+    info,
+    fonte,
+    chave,
+    slot,
+    streaming: false,
+    config: null,
+    audioConfig: null,
+  };
+  room.broadcasters.set(chave, entry);
   room.slots.set(slot, entry);
   ws.__entry = entry;
   room.emptySince = null;
@@ -371,7 +420,12 @@ export function startStream(room, entry) {
     v.__primed?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
   }
-  toViewers(room, { type: 'stream-start', slot: entry.slot, userId: entry.info.id });
+  toViewers(room, {
+    type: 'stream-start',
+    slot: entry.slot,
+    userId: entry.info.id,
+    fonte: entry.fonte,
+  });
   broadcastState(room);
 }
 
@@ -460,16 +514,12 @@ export function stopStream(room, entry) {
 
 export function detachBroadcaster(room, ws) {
   const entry = ws.__entry;
-  if (!entry || room.broadcasters.get(entry.info.id) !== entry) return;
+  if (!entry || room.broadcasters.get(entry.chave) !== entry) return;
 
   stopStream(room, entry);
-  room.broadcasters.delete(entry.info.id);
+  room.broadcasters.delete(entry.chave);
   room.slots.delete(entry.slot);
   broadcastState(room);
-}
-
-export function broadcasterOf(room, userId) {
-  return room.broadcasters.get(userId) ?? null;
 }
 
 // --------------------------------------------------------------- espectador
@@ -511,7 +561,12 @@ export function attachViewer(room, ws, info) {
   // Anuncia o que está no ar, sem começar a mandar quadros: assistir é opt-in.
   for (const entry of room.broadcasters.values()) {
     if (!entry.streaming) continue;
-    sendJson(ws, { type: 'stream-start', slot: entry.slot, userId: entry.info.id });
+    sendJson(ws, {
+      type: 'stream-start',
+      slot: entry.slot,
+      userId: entry.info.id,
+      fonte: entry.fonte,
+    });
   }
 
   broadcastState(room);

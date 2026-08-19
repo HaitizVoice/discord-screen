@@ -182,7 +182,17 @@ function anunciar(url, escreveu, clientId) {
     return;
   }
 
-  console.log('  No portal do Discord, em Activities → URL Mappings, o "Target" é:');
+  // O link leva direto à aplicação certa, que é o que ninguém consegue montar
+  // de cabeça. As telas de dentro ficam por escrito: o portal não expõe caminho
+  // estável para elas, e um link adivinhado que caia em 404 seria pior do que
+  // "Activities → URL Mappings", que continua valendo quando eles mexerem na
+  // navegação.
+  console.log('  Abra a sua aplicação no portal do Discord:');
+  console.log(
+    `\n      ${cor.verde}https://discord.com/developers/applications/${clientId}${cor.fim}\n`
+  );
+
+  console.log('  Lá, em Activities → URL Mappings, o "Target" é:');
   console.log(`\n      ${cor.verde}${dominio}${cor.fim}\n`);
   console.log('  E em OAuth2 → Redirects:');
   console.log(`\n      ${cor.verde}${url}/auth/callback${cor.fim}\n`);

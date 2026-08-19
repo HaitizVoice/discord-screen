@@ -13,7 +13,12 @@
  * Toda a lógica de captura e codificação vive em /shared/broadcaster.js, a mesma
  * usada dentro da Activity — aqui é só a interface.
  */
-import { createBroadcaster, supportError, opcoesTela } from '/shared/broadcaster.js?v=6';
+import {
+  createBroadcaster,
+  supportError,
+  fonteIndisponivel,
+  opcoesTela,
+} from '/shared/broadcaster.js?v=7';
 
 const $ = (id) => document.getElementById(id);
 
@@ -145,7 +150,7 @@ function atenderPedido(fonte, novas) {
   aplicarOpcoes(novas);
 
   const painel = paineis[fonte];
-  if (!painel || painel.ativo()) return;
+  if (!painel || painel.ativo() || painel.indisponivel()) return;
 
   chamar(fonte);
   if (fonte === 'camera') painel.verCamera();
@@ -468,6 +473,15 @@ function criarPainel(fonte) {
     }
   }
 
+  // O que impede esta fonte, sem derrubar a outra: um celular não tem
+  // `getDisplayMedia` e tem `getUserMedia`, então a tela cai e a câmera fica.
+  const indisponivel = fonteIndisponivel(fonte);
+  if (indisponivel) {
+    el('start').disabled = true;
+    el('escolher').disabled = true;
+    setStatus(indisponivel, 'error');
+  }
+
   el('start').addEventListener('click', ligar);
   el('stop').addEventListener('click', () =>
     broadcaster?.stop(camera ? 'Câmera desligada.' : 'Transmissão encerrada.')
@@ -492,6 +506,7 @@ function criarPainel(fonte) {
     escolher,
     verCamera,
     setStatus,
+    indisponivel: () => Boolean(indisponivel),
     aplicarQualidade: () => broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps }),
     ativo: () => Boolean(broadcaster),
     // Fechar a aba tem que soltar a câmera, esteja ela no ar ou só na prévia.

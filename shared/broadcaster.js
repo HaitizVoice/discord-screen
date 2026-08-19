@@ -87,16 +87,14 @@ export function opcoesTela({ fps = 30, comSom = false, video } = {}) {
   return opts;
 }
 
-/** Motivo pelo qual este navegador não consegue transmitir, ou null. */
-export function supportError({ requireChromium = false, fonte = 'tela' } = {}) {
-  const camera = fonte === 'camera';
-
-  if (camera && !navigator.mediaDevices?.getUserMedia) {
-    return 'Este navegador não permite acesso à câmera.';
-  }
-  if (!camera && !navigator.mediaDevices?.getDisplayMedia) {
-    return 'Este navegador não permite captura de tela. Navegador de celular não suporta captura — use um desktop.';
-  }
+/**
+ * Motivo pelo qual este navegador não consegue transmitir nada, ou null.
+ *
+ * Só o que vale para as duas fontes. O que cada uma precisa é pergunta de cada
+ * uma — ver `fonteIndisponivel` —, senão faltar `getDisplayMedia` derrubaria
+ * também a câmera, que não depende dele.
+ */
+export function supportError({ requireChromium = false } = {}) {
   if (!window.VideoEncoder || !window.VideoFrame || !window.EncodedVideoChunk) {
     return 'Este navegador não tem WebCodecs, necessário para transmitir. Use Chrome, Edge ou outro navegador Chromium no desktop.';
   }
@@ -106,6 +104,24 @@ export function supportError({ requireChromium = false, fonte = 'tela' } = {}) {
     return 'Transmitir exige um navegador Chromium — Chrome, Edge, Brave ou Opera. Nos outros a captura fica com qualidade ruim, então está desabilitada. Você continua podendo assistir.';
   }
   return null;
+}
+
+/**
+ * Motivo pelo qual esta fonte não pode ser capturada aqui, ou null.
+ *
+ * Separado do `supportError` porque as duas dependem de APIs diferentes: um
+ * celular não tem `getDisplayMedia` e tem `getUserMedia`, e derrubar a página
+ * inteira por causa da tela tirava dele a câmera, que funcionaria.
+ */
+export function fonteIndisponivel(fonte) {
+  if (fonte === 'camera') {
+    return navigator.mediaDevices?.getUserMedia
+      ? null
+      : 'Este navegador não permite acesso à câmera.';
+  }
+  return navigator.mediaDevices?.getDisplayMedia
+    ? null
+    : 'Este navegador não permite captura de tela. Navegador de celular não suporta captura — use um desktop.';
 }
 
 /**

@@ -42,11 +42,6 @@ h1 {
   font-size: 22px;
 }
 
-.sub {
-  margin: 0 0 24px;
-  color: var(--muted);
-  font-size: 14px;
-}
 
 .row {
   display: flex;
@@ -158,12 +153,6 @@ video {
   object-fit: contain;
 }
 
-.preset {
-  margin: 0 0 4px;
-  color: var(--muted);
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
 
 .note {
   margin: 18px 0 24px;

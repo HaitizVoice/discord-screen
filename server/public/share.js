@@ -47,17 +47,13 @@ function aplicarOpcoes(novas) {
   if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
   if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
   if (novas.som !== undefined) opcoes.som = novas.som === '1';
-  mostrarOpcoes();
+  mostrarNota();
 }
 
-function mostrarOpcoes() {
-  const mbps = (opcoes.bitrate / 1e6).toFixed(1).replace('.', ',');
-  $('presetLine').textContent =
-    `${mbps} Mb/s · ${opcoes.fps} fps${opcoes.som ? ' · com som' : ' · sem som'}`;
-
-  // A nota só aparece quando há instrução a dar — e só há com som ligado, onde
-  // existe uma caixa para marcar na janela do navegador. Sem som ela repetia o
-  // que o resumo logo acima já diz, ocupando uma caixa inteira para isso.
+/** A nota da tela, único texto que ainda depende das opções. */
+function mostrarNota() {
+  // Só aparece quando há instrução a dar — e só há com som ligado, onde existe
+  // uma caixa para marcar na janela que o navegador abre.
   const nota = $('tela-nota');
   nota.hidden = !opcoes.som;
   nota.textContent = opcoes.som
@@ -76,11 +72,11 @@ function readTokenPayload() {
 }
 
 function falhar(titulo, msg) {
-  $('roomLine').textContent = titulo;
-  $('setup').hidden = true;
   for (const f of FONTES) $(`bloco-${f}`).hidden = true;
+  // Título e motivo no mesmo lugar: sem o cabeçalho não há mais onde separar
+  // os dois, e separados em duas linhas eles diziam a mesma coisa duas vezes.
   const el = $('pageStatus');
-  el.textContent = msg;
+  el.textContent = `${titulo} ${msg}`;
   el.className = 'status error';
 }
 
@@ -504,16 +500,15 @@ if (!payload) {
 } else if (missing) {
   falhar('Navegador sem suporte.', missing);
 } else {
-  $('roomLine').textContent = `Transmitindo como ${payload.name}`;
-  mostrarOpcoes();
+  mostrarNota();
 
   for (const f of FONTES) paineis[f] = criarPainel(f);
   ligarControle();
 
   // A atividade diz qual fonte motivou a abertura da aba. A tela espera o
-  // clique; a câmera pode subir sozinha, mas só depois que a página apareceu —
-  // pedir permissão numa aba que o navegador acabou de abrir em segundo plano
-  // deixaria o pedido preso sem ninguém ver.
+  // clique, que é o gesto que o seletor exige; a câmera abre a prévia, mas só
+  // depois que a página apareceu — pedir permissão numa aba que o navegador
+  // acabou de abrir em segundo plano deixaria o pedido preso sem ninguém ver.
   const pedida = query.get('fonte');
   if (FONTES.includes(pedida)) atenderPedido(pedida);
 }

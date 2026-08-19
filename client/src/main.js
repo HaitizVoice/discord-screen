@@ -1001,6 +1001,10 @@ function remove(key) {
   }
 }
 
+function selectHasValue(select, value) {
+  return Array.from(select.options).some((o) => o.value === value);
+}
+
 // -------------------------------------------------------------------- lobby
 
 /** Tokens da sala atual. null = estamos no lobby. */
@@ -1602,6 +1606,16 @@ $('share').addEventListener('click', () => {
  * já vêm com os valores atuais e o botão aplica em vez de iniciar.
  */
 let modalMode = 'start';
+const BROADCAST_FPS_KEY = 'broadcastFps';
+
+function applySavedBroadcastFps() {
+  const fps = read(BROADCAST_FPS_KEY);
+  if (fps && selectHasValue($('mFps'), fps)) $('mFps').value = fps;
+}
+
+function saveBroadcastFps() {
+  store(BROADCAST_FPS_KEY, $('mFps').value);
+}
 
 function openModal(mode) {
   modalMode = mode;
@@ -1624,9 +1638,11 @@ function openModal(mode) {
     const s = myBroadcast.getSettings();
     $('mQuality').value = String(s.bitrate);
     $('mFps').value = String(s.fps);
+  } else {
+    applySavedBroadcastFps();
   }
 
-  $('modal').hidden = false;
+  $('modal').hidden = false;
 }
 
 $('liveSettings').addEventListener('click', () => openModal('live'));
@@ -1723,6 +1739,7 @@ async function broadcastFromHere() {
   const startedAt = performance.now();
   try {
     await b.start();
+    saveBroadcastFps();
     myBroadcast = b;
     closeModal();
     renderBar();
@@ -1751,6 +1768,7 @@ $('modalGo').addEventListener('click', async () => {
       bitrate: Number($('mQuality').value),
       fps: Number($('mFps').value),
     });
+    saveBroadcastFps();
     closeModal();
     return;
   }
@@ -1761,6 +1779,7 @@ $('modalGo').addEventListener('click', async () => {
   if (await broadcastFromHere()) return;
 
   closeModal();
+  saveBroadcastFps();
 
   // As opções seguem na URL: a página de captura já abre configurada, sem
   // pedir as mesmas escolhas de novo.

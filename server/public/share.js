@@ -14,6 +14,7 @@ const $ = (id) => document.getElementById(id);
 
 const query = new URLSearchParams(location.search);
 const token = query.get('t');
+const BROADCAST_FPS_KEY = 'broadcastFps';
 
 let broadcaster = null;
 
@@ -57,6 +58,29 @@ function fail(title, msg) {
   setStatus(msg, 'error');
 }
 
+function read(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function store(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* preferência só em memória */
+  }
+}
+
+function setSelectValue(select, value) {
+  if (!value) return false;
+  if (!Array.from(select.options).some((o) => o.value === value)) return false;
+  select.value = value;
+  return true;
+}
+
 function readTokenPayload() {
   try {
     return JSON.parse(atob(token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
@@ -96,6 +120,8 @@ function applyPresets() {
   const fps = query.get('fps');
   const som = query.get('som');
 
+  setSelectValue($('fps'), read(BROADCAST_FPS_KEY));
+
   // A opção de som veio decidida da atividade, então a caixa some junto com os
   // seletores — repetir a mesma escolha aqui só confundiria.
   if (som !== null) {
@@ -106,7 +132,7 @@ function applyPresets() {
   if (!q && !fps) return;
 
   if (q) $('quality').value = q;
-  if (fps) $('fps').value = fps;
+  setSelectValue($('fps'), fps);
 
   for (const row of document.querySelectorAll('#setup .row')) row.hidden = true;
 
@@ -160,6 +186,7 @@ async function start() {
 
   try {
     const stream = await broadcaster.start();
+    store(BROADCAST_FPS_KEY, $('fps').value);
     $('preview').srcObject = stream;
     $('preview').play().catch(() => {});
     $('setup').hidden = true;

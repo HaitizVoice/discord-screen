@@ -38,6 +38,7 @@ const CONHECIDAS = [
   'DISCORD_CLIENT_ID',
   'DISCORD_CLIENT_SECRET',
   'DISCORD_BOT_TOKEN',
+  'DISCORD_ADMIN_ID',
   'NODE_ENV',
   'TUNEL_CONFIG',
 ];
@@ -77,6 +78,9 @@ export function gravarEnv(novos) {
     '# Token do bot. Opcional: sem ele tudo funciona, menos a "Sala da call",',
     '# que precisa confirmar com o Discord quem está no canal de voz.',
     `DISCORD_BOT_TOKEN=${v.DISCORD_BOT_TOKEN ?? ''}`,
+    '',
+    '# ID da conta Discord que pode abrir /admin. Vazio = painel desligado.',
+    `DISCORD_ADMIN_ID=${v.DISCORD_ADMIN_ID ?? ''}`,
     '',
     '# Deixe "production" quando publicar de verdade.',
     `NODE_ENV=${v.NODE_ENV ?? 'development'}`,

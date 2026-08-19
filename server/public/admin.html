@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>Admin · Sala de Tela</title>
+    <link rel="stylesheet" href="/admin.css" />
+  </head>
+  <body>
+    <div class="noise" aria-hidden="true"></div>
+
+    <main id="loading" class="center-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <p>Verificando sua sessão…</p>
+    </main>
+
+    <main id="login" class="center-card" hidden>
+      <div class="brand-mark">ST</div>
+      <p class="eyebrow">SALA DE TELA</p>
+      <h1>Painel administrativo</h1>
+      <p id="loginMessage" class="muted">
+        Entre com a conta Discord autorizada para visualizar a infraestrutura.
+      </p>
+      <a class="discord-button" href="/admin/auth/login">
+        <span aria-hidden="true">↗</span>
+        Entrar com Discord
+      </a>
+    </main>
+
+    <main id="dashboard" class="dashboard" hidden>
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark small">ST</div>
+          <div>
+            <p class="eyebrow">SALA DE TELA</p>
+            <h1>Admin</h1>
+          </div>
+        </div>
+        <div class="top-actions">
+          <span id="liveStatus" class="live"><i></i> Conectando</span>
+          <span id="lastUpdate" class="last-update">—</span>
+          <button id="refresh" class="icon-button" title="Atualizar agora">↻</button>
+          <button id="logout" class="text-button">Sair</button>
+        </div>
+      </header>
+
+      <section id="errorBanner" class="error-banner" hidden></section>
+
+      <section class="hero">
+        <div>
+          <p class="eyebrow">VISÃO GERAL</p>
+          <h2>Operação em tempo real</h2>
+          <p class="muted">Conexões, mídia e recursos deste processo.</p>
+        </div>
+        <div id="hostPill" class="host-pill">Carregando host…</div>
+      </section>
+
+      <section class="metric-grid primary-metrics">
+        <article class="metric accent-purple">
+          <span>Pessoas online</span><strong id="metricUsers">—</strong>
+          <small id="metricConnections">— conexões</small>
+        </article>
+        <article class="metric accent-green">
+          <span>Transmitindo</span><strong id="metricStreams">—</strong>
+          <small id="metricWatchers">— espectadores ativos</small>
+        </article>
+        <article class="metric accent-blue">
+          <span>Banda da mídia</span><strong id="metricBandwidth">—</strong>
+          <small id="metricBandwidthSplit">—</small>
+        </article>
+        <article class="metric accent-orange">
+          <span>Ping médio</span><strong id="metricPing">—</strong>
+          <small id="metricPingP95">—</small>
+        </article>
+        <article class="metric">
+          <span>Servidores ativos</span><strong id="metricGuilds">—</strong>
+          <small id="metricRooms">— salas</small>
+        </article>
+        <article class="metric">
+          <span>Tráfego acumulado</span><strong id="metricTrafficTotal">—</strong>
+          <small id="metricDropped">— descartado</small>
+        </article>
+      </section>
+
+      <section class="panel chart-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">RELAY</p>
+            <h3>Banda nos últimos 2 minutos</h3>
+          </div>
+          <div class="legend">
+            <span><i class="dot inbound"></i> Entrada</span>
+            <span><i class="dot outbound"></i> Saída</span>
+            <span><i class="dot host"></i> Rede do host</span>
+          </div>
+        </div>
+        <div class="canvas-wrap"><canvas id="bandwidthChart"></canvas></div>
+      </section>
+
+      <section class="two-column">
+        <article class="panel">
+          <div class="panel-head"><div><p class="eyebrow">PROCESSO</p><h3>Recursos</h3></div></div>
+          <div class="resource-grid">
+            <div><span>CPU do processo</span><strong id="processCpu">—</strong></div>
+            <div><span>CPU do host</span><strong id="hostCpu">—</strong></div>
+            <div><span>Memória do processo</span><strong id="processMemory">—</strong></div>
+            <div><span>Memória do host</span><strong id="hostMemory">—</strong></div>
+            <div><span>Disco utilizado</span><strong id="diskUsage">—</strong></div>
+            <div><span>Uptime do processo</span><strong id="processUptime">—</strong></div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head"><div><p class="eyebrow">AMBIENTE</p><h3>Runtime e container</h3></div></div>
+          <dl id="environmentList" class="detail-list"></dl>
+        </article>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-head">
+          <div><p class="eyebrow">DISCORD</p><h3>Servidores ativos</h3></div>
+          <span id="guildCount" class="count-pill">0</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Servidor</th><th>Pessoas</th><th>Conexões</th><th>Salas</th><th>Streams</th><th>Banda</th></tr></thead>
+            <tbody id="guildRows"></tbody>
+          </table>
+        </div>
+        <p id="guildEmpty" class="empty-table">Nenhum servidor Discord ativo.</p>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-head">
+          <div><p class="eyebrow">SALAS</p><h3>Salas e calls</h3></div>
+          <span id="roomCount" class="count-pill">0</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Sala</th><th>Origem</th><th>Pessoas</th><th>Streams</th><th>Banda</th><th>Descartes</th></tr></thead>
+            <tbody id="roomRows"></tbody>
+          </table>
+        </div>
+        <p id="roomEmpty" class="empty-table">Nenhuma sala ativa.</p>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-head">
+          <div><p class="eyebrow">MÍDIA</p><h3>Transmissões</h3></div>
+          <span id="streamCount" class="count-pill">0</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Transmissor</th><th>Sala</th><th>Vídeo</th><th>Espectadores</th><th>Entrada</th><th>Saída</th><th>Buffer</th></tr></thead>
+            <tbody id="streamRows"></tbody>
+          </table>
+        </div>
+        <p id="streamEmpty" class="empty-table">Nenhuma transmissão ativa.</p>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-head">
+          <div><p class="eyebrow">SESSÕES</p><h3>Usuários conectados</h3></div>
+          <span id="userCount" class="count-pill">0</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Usuário</th><th>Servidor / sala</th><th>Papel</th><th>Conexões</th><th>Ping</th><th>Conectado há</th></tr></thead>
+            <tbody id="userRows"></tbody>
+          </table>
+        </div>
+        <p id="userEmpty" class="empty-table">Nenhum usuário conectado.</p>
+      </section>
+
+      <footer>
+        <span id="trafficNote">Banda da mídia medida no payload da aplicação.</span>
+        <span id="serverClock">—</span>
+      </footer>
+    </main>
+
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>

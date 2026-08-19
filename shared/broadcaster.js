@@ -46,8 +46,13 @@ function fitWithin(w, h) {
 }
 
 /** Motivo pelo qual este navegador não consegue transmitir, ou null. */
-export function supportError({ requireChromium = false } = {}) {
-  if (!navigator.mediaDevices?.getDisplayMedia) {
+export function supportError({ requireChromium = false, fonte = 'tela' } = {}) {
+  const camera = fonte === 'camera';
+
+  if (camera && !navigator.mediaDevices?.getUserMedia) {
+    return 'Este navegador não permite acesso à câmera.';
+  }
+  if (!camera && !navigator.mediaDevices?.getDisplayMedia) {
     return 'Este navegador não permite captura de tela. Navegador de celular não suporta captura — use um desktop.';
   }
   if (!window.VideoEncoder || !window.VideoFrame || !window.EncodedVideoChunk) {
@@ -67,6 +72,7 @@ export function supportError({ requireChromium = false } = {}) {
  * @param {number} opts.bitrate      bits por segundo
  * @param {number} opts.fps
  * @param {boolean} [opts.audio]     capturar também o som do computador
+ * @param {'tela'|'camera'} [opts.fonte]  de onde vem o vídeo
  * @param {(info:object)=>void} [opts.onStatus]  codec/resolução/caminho de captura
  * @param {(stats:object)=>void} [opts.onStats]  viewers, fps, mbps, segundos no ar
  * @param {(reason:string)=>void} [opts.onEnd]   encerrou (por qualquer motivo)
@@ -78,6 +84,7 @@ export function createBroadcaster({
   bitrate,
   fps,
   audio = false,
+  fonte = 'tela',
   onStatus,
   onStats,
   onEnd,
@@ -112,13 +119,19 @@ export function createBroadcaster({
 
   async function start() {
     // Precisa vir do gesto do usuário; qualquer await antes disso o invalida.
-    stream = await navigator.mediaDevices.getDisplayMedia(opcoesCaptura());
+    stream = fonte === 'camera' ? await capturarCamera() : await capturarTela();
 
     const track = stream.getVideoTracks()[0];
-    // Diz ao encoder que o conteúdo é tela (texto/UI), não vídeo natural —
-    // preserva nitidez das bordas em vez de suavizar.
-    track.contentHint = 'text';
-    track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
+    // Tela é texto e interface, onde suavizar borra o que importa. Câmera é
+    // vídeo natural, e aí suavizar é justamente o certo.
+    track.contentHint = fonte === 'camera' ? 'motion' : 'text';
+    track.addEventListener('ended', () =>
+      stop(
+        fonte === 'camera'
+          ? 'A câmera foi desligada.'
+          : 'Você parou o compartilhamento pelo navegador.'
+      )
+    );
 
     const s = track.getSettings();
     const target = fitWithin(s.width ?? 1280, s.height ?? 720);
@@ -171,6 +184,33 @@ export function createBroadcaster({
     if (audioTrack) pumpAudio(audioTrack);
 
     return stream;
+  }
+
+  function capturarTela() {
+    return navigator.mediaDevices.getDisplayMedia(opcoesCaptura());
+  }
+
+  /**
+   * Câmera, sempre sem som.
+   *
+   * O microfone fica de fora de propósito: a voz já anda pela call do Discord,
+   * com cancelamento de eco que aqui não existe. Somá-la devolveria a mesma
+   * pessoa duas vezes, fora de sincronia — e o `prepararSom` nem chega a rodar,
+   * porque sem faixa de áudio no stream ele retorna null.
+   *
+   * 720p de teto porque câmera não tem texto a preservar: acima disso é banda
+   * gasta em ruído de sensor, e o teto de 1080p do `fitWithin` nem entra em
+   * jogo.
+   */
+  function capturarCamera() {
+    return navigator.mediaDevices.getUserMedia({
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: fps, max: fps },
+      },
+      audio: false,
+    });
   }
 
   /**

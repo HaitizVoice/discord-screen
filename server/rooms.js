@@ -35,6 +35,11 @@ const MAX_ROOM_NAME = 40;
 // 12s cobre um reload com folga e some rápido o bastante para não deixar sala
 // fantasma na lista.
 const EMPTY_GRACE_MS = 12 * 1000;
+// Quanto tempo a transmissão de alguém sobrevive à saída dessa pessoa da sala.
+// Existe pelo mesmo motivo da carência acima: recarregar a atividade desconecta
+// e reconecta, e sem ela um F5 derrubaria a transmissão de quem não saiu de
+// lugar nenhum.
+const SEM_PRESENCA_MS = 15 * 1000;
 const SWEEP_EVERY_MS = 4 * 1000;
 
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
@@ -137,6 +142,17 @@ export function broadcastersOf(room, userId, fonte = null) {
 }
 
 const transmitindo = (room, userId) => broadcastersOf(room, userId).length > 0;
+
+/**
+ * A pessoa está na sala, e não só transmitindo para ela.
+ *
+ * A aba de captura não conta: ela tem conexão própria e continua de pé depois
+ * que a atividade fecha, que é justamente o caso a detectar.
+ */
+function temViewer(room, userId) {
+  for (const v of room.viewers) if (v.__info?.id === userId) return true;
+  return false;
+}
 
 /**
  * A aba de captura, ligada desde que carrega e antes de qualquer transmissão.
@@ -362,9 +378,47 @@ function countPeople(room) {
  * A carência existe porque recarregar a atividade desconecta e reconecta: sem
  * ela, quem estivesse sozinho perderia a sala a cada F5.
  */
+/**
+ * Encerra a transmissão de quem já não está mais na sala.
+ *
+ * A aba de captura tem conexão própria: fechar a atividade não a alcança, e a
+ * tela continua indo para quem ficou — sem a pessoa estar vendo, e sem nada na
+ * frente dela dizendo que ainda está no ar. Isso é vazamento de tela, não
+ * detalhe de interface, então quem decide é o servidor, que é o único lado que
+ * enxerga as duas conexões.
+ *
+ * O `stop-request` faz a aba encerrar por conta própria e dizer o motivo. O
+ * `detachBroadcaster` vem junto e não depende dela: uma aba travada, ou que
+ * perdeu o socket, não pode continuar segurando a tela no ar.
+ */
+function derrubarAbandonadas(room, now) {
+  for (const entry of room.broadcasters.values()) {
+    if (temViewer(room, entry.info.id)) {
+      entry.semDonoDesde = null;
+      continue;
+    }
+    if (entry.semDonoDesde === null) {
+      entry.semDonoDesde = now;
+      continue;
+    }
+    if (now - entry.semDonoDesde <= SEM_PRESENCA_MS) continue;
+
+    sendJson(entry.ws, {
+      type: 'stop-request',
+      motivo: 'Você saiu da atividade, então a transmissão parou.',
+    });
+    console.log(
+      `[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`
+    );
+    detachBroadcaster(room, entry.ws);
+  }
+}
+
 const sweeper = setInterval(() => {
   const now = Date.now();
   for (const room of rooms.values()) {
+    derrubarAbandonadas(room, now);
+
     const empty = room.viewers.size === 0 && room.broadcasters.size === 0;
 
     if (!empty) {
@@ -542,6 +596,8 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela') {
     chave,
     slot,
     streaming: false,
+    // Desde quando quem transmite não está mais na sala. Null enquanto está.
+    semDonoDesde: null,
     config: null,
     audioConfig: null,
     connectedAt: Date.now(),

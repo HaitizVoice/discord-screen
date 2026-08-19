@@ -767,7 +767,7 @@ export function createBroadcaster({
         else if (msg.type === 'state') viewers = msg.viewers;
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
-        else if (msg.type === 'stop-request') stop('Transmissão encerrada pela atividade.');
+        else if (msg.type === 'stop-request') stop(msg.motivo ?? 'Transmissão encerrada pela atividade.');
         else if (msg.type === 'error') {
           if (running) stop(msg.message);
           else {

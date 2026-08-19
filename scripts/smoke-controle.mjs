@@ -53,5 +53,61 @@ await new Promise((r) => { zumbi.on('close', r); zumbi.on('error', r); setTimeou
 check('reconectar na sala morta responde room-gone', doZumbi.some((m) => m.type === 'room-gone'),
   `recebeu: ${JSON.stringify(doZumbi.map((m) => m.type))}`);
 
+// ---------------------------------------------------------------------------
+
+/**
+ * A transmissao de quem saiu da sala para sozinha?
+ *
+ * A aba de captura tem conexao propria: fechar a atividade nao a alcanca, e sem
+ * isto a tela continuava indo para quem ficou, sem a pessoa saber.
+ */
+{
+  const eu = await api('/api/session-dev', { instance_id: inst, name: 'Sai' });
+  const sala = await api('/api/rooms/create', { identity: eu.identity, name: 'Sala Sai' });
+  const share = new URL(sala.shareUrl).searchParams.get('t');
+
+  const abrir = (tok, sufixo = '') =>
+    new Promise((ok, no) => {
+      const w = new WebSocket(WSB + '/ws?t=' + encodeURIComponent(tok) + sufixo);
+      w.on('open', () => ok(w));
+      w.on('error', no);
+    });
+
+  const viewer = await abrir(sala.viewerToken);
+  const tx = await abrir(share, '&fonte=tela');
+  const doTx = [];
+  let txFechou = false;
+  tx.on('message', (d) => {
+    try { doTx.push(JSON.parse(d.toString())); } catch { /* quadro binario */ }
+  });
+  tx.on('close', () => { txFechou = true; });
+  tx.send(JSON.stringify({ type: 'start' }));
+  await new Promise((r) => setTimeout(r, 600));
+
+  check('transmissor recebeu slot', doTx.some((m) => m.type === 'slot'));
+
+  // Com a pessoa na sala, nada pode cair.
+  await new Promise((r) => setTimeout(r, 8000));
+  check(
+    'com a pessoa na sala, a transmissao continua',
+    !txFechou && !doTx.some((m) => m.type === 'stop-request')
+  );
+
+  // Sai da atividade. So a aba de captura fica de pe.
+  viewer.close();
+  console.log('esperando a carencia de presenca (22s)...');
+  await new Promise((r) => setTimeout(r, 22000));
+
+  const pedido = doTx.find((m) => m.type === 'stop-request');
+  check(
+    'quem saiu da sala tem a transmissao encerrada',
+    Boolean(pedido),
+    'recebeu: ' + JSON.stringify(doTx.map((m) => m.type))
+  );
+  check('o pedido explica o motivo', Boolean(pedido && pedido.motivo), (pedido && pedido.motivo) || '');
+
+  tx.close();
+}
+
 console.log(falhas ? `\n${falhas} falha(s)` : '\nTudo passou');
 process.exit(falhas ? 1 : 0);

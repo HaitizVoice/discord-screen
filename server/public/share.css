@@ -228,15 +228,15 @@ video {
     flex-direction: column;
   }
 
-  /* O espaço livre vai para cima da nota, e não para cima do botão: assim a
-     nota e a ação descem juntas, e as duas colunas terminam na mesma linha
-     mesmo quando só uma delas tem a caixa de som.
+  /* O espaço livre vai todo para cima da ação, que é o que encosta na base das
+     duas colunas — assim elas terminam na mesma linha mesmo quando só uma tem
+     algo a dizer acima do botão.
 
-     Um `margin-top: auto` só por coluna — dois dividiriam a sobra entre eles e
-     nada encostaria em lugar nenhum. Por isso a nota cobre o bloco parado e o
-     botão vermelho cobre o bloco no ar: cada um existe só no seu, então nunca
+     Um `margin-top: auto` só por coluna: dois dividiriam a sobra entre eles e
+     nada encostaria em lugar nenhum. Por isso o botão azul cobre o bloco parado
+     e o vermelho cobre o bloco no ar — cada um existe só no seu, então nunca
      aparecem os dois juntos. */
-  .bloco > div > .note {
+  .bloco > div > button.primary {
     margin-top: auto;
   }
 

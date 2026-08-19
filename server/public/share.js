@@ -50,11 +50,14 @@ function mostrarOpcoes() {
   $('presetLine').textContent =
     `${mbps} Mb/s · ${opcoes.fps} fps${opcoes.som ? ' · com som' : ' · sem som'}`;
 
-  // A nota da tela acompanha: com som ela explica a caixa que o navegador
-  // mostra; sem som, diz onde ligar, que já não é aqui.
-  $('tela-nota').textContent = opcoes.som
+  // A nota só aparece quando há instrução a dar — e só há com som ligado, onde
+  // existe uma caixa para marcar na janela do navegador. Sem som ela repetia o
+  // que o resumo logo acima já diz, ocupando uma caixa inteira para isso.
+  const nota = $('tela-nota');
+  nota.hidden = !opcoes.som;
+  nota.textContent = opcoes.som
     ? 'Marque também "Compartilhar o áudio" na janela que o navegador abrir — sem isso ele entrega a tela sem som. O som vem da aba ou da janela escolhida: para levar o som de um jogo, compartilhe o jogo como janela, não a tela inteira.'
-    : 'Esta transmissão vai sem som. Para ligar, use a engrenagem na atividade do Discord.';
+    : '';
 }
 
 const paineis = {};

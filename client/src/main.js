@@ -786,7 +786,6 @@ function renderBar() {
   btn.disabled = false;
 
   const rotuloShare = telaNoAr ? 'Parar tela' : 'Compartilhar tela';
-  $('shareLabel').textContent = rotuloShare;
   btn.dataset.tip = rotuloShare;
   btn.setAttribute('aria-label', rotuloShare);
 
@@ -796,7 +795,6 @@ function renderBar() {
   const cam = $('camera');
   cam.classList.toggle('live', cameraNoAr);
   const rotuloCam = cameraNoAr ? 'Desligar câmera' : 'Ligar câmera';
-  $('cameraLabel').textContent = rotuloCam;
   cam.dataset.tip = rotuloCam;
   cam.setAttribute('aria-label', rotuloCam);
 

@@ -777,10 +777,6 @@ button {
   background: #43454b;
 }
 
-.btn.wide {
-  padding: 0 20px;
-}
-
 /* Ação principal disponível */
 .btn.go {
   background: var(--accent);
@@ -1341,15 +1337,6 @@ button {
   .btn svg {
     width: 18px;
     height: 18px;
-  }
-
-  .btn.wide {
-    padding: 0 10px;
-  }
-
-  /* O ícone e a cor já dizem o que o botão faz; a dica cobre o resto. */
-  #shareLabel {
-    display: none;
   }
 
   .tile-watchers,

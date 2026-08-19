@@ -254,7 +254,11 @@ video {
    duas ações, que são o mesmo gesto, desencontram na vertical. */
 .sem-preview {
   display: none;
-  flex: 0 0 auto;
+  /* Cresce com a coluna. Com tamanho fixo ele sobra um vão morto acima do
+     botão assim que a outra fonte entra no ar e estica o lado de lá — o
+     `aspect-ratio` continua dando o tamanho mínimo, quando não há o que
+     preencher. */
+  flex: 1 1 auto;
   width: 100%;
   aspect-ratio: 16 / 9;
   align-items: center;

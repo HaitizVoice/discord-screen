@@ -376,6 +376,17 @@ const sweeper = setInterval(() => {
       continue;
     }
     if (now - room.emptySince > EMPTY_GRACE_MS) {
+      // As abas de captura não seguram a sala de pé, mas continuam ligadas a
+      // ela — e essa é a única conexão que sobrevive a este ponto, justamente
+      // porque ficou de fora da conta de vazio. Sem fechar aqui, ela segue
+      // aberta contra um objeto que ninguém mais alcança: não recebe mais nada,
+      // e como não há `close`, a aba nem tenta reconectar.
+      for (const ws of room.controles) {
+        sendJson(ws, { type: 'room-gone' });
+        ws.close();
+      }
+      room.controles.clear();
+
       rooms.delete(room.id);
       console.log(`[room ${room.id}] fechada por inatividade`);
     }

@@ -108,7 +108,8 @@ body {
 }
 
 /* Tela cheia: só o palco. A barra de controles fica, senão não haveria saída
-   visível — sair por tecla é atalho, não é caminho. */
+   visível — sair por tecla é atalho, não é caminho. Ela deixa de ocupar faixa
+   e passa a flutuar por cima — ver `#app.cheia`, logo abaixo das barras. */
 .grid.palco.cheia {
   grid-template-columns: minmax(0, 1fr);
   padding: 0;
@@ -657,12 +658,9 @@ button {
   cursor: pointer;
 }
 
-/* As barras ocupam espaço no layout em vez de flutuar sobre o vídeo.
-
-   A versão anterior as deixava sobrepostas e as escondia sozinha depois de uns
-   segundos parada — o sumiço existia só para desobstruir a tela. Ocupando
-   lugar, elas não obstruem nada, e some junto o comportamento de aparecer e
-   desaparecer debaixo do cursor. */
+/* Fora da tela cheia as barras ocupam espaço no layout em vez de flutuar sobre
+   o vídeo: ocupando lugar não obstruem nada, e nada precisa sumir sob o cursor.
+   Em tela cheia é o contrário, e o porquê está na regra de `#app.cheia`. */
 .topbar {
   flex: 0 0 auto;
   display: flex;
@@ -678,6 +676,35 @@ button {
   align-items: center;
   gap: 10px;
   padding: 0 16px 16px;
+}
+
+/* Em tela cheia as barras saem do layout e flutuam sobre o vídeo: cada faixa
+   reservada é uma tira de tela a menos, e em tela cheia é a tela que se veio
+   ver. Paradas elas somem sozinhas, e qualquer movimento do cursor as traz de
+   volta — quem não mexe o mouse não está procurando botão nenhum. */
+#app.cheia .topbar,
+#app.cheia .bottombar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  transition: opacity 0.25s;
+}
+
+#app.cheia .topbar {
+  top: 0;
+}
+
+#app.cheia .bottombar {
+  bottom: 0;
+}
+
+/* pointer-events junto com a opacidade: uma barra invisível continua roubando
+   o clique que era para o vídeo. */
+#app.cheia.ocioso .topbar,
+#app.cheia.ocioso .bottombar {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* Sem nada visível dentro, a barra vira uma faixa vazia — é o que sobra no

@@ -241,6 +241,7 @@ function renderGrid() {
     grid.hidden = true;
     $('empty').hidden = true;
     $('fullscreen').hidden = true;
+    $('app').classList.remove('cheia');
     return;
   }
 
@@ -261,6 +262,10 @@ function renderGrid() {
 
   const noPalco = activeSlot !== null;
   $('fullscreen').hidden = !noPalco;
+  // A classe vai no #app, e não na grade: quem sai do layout são as barras, que
+  // são irmãs dela. Fica acima do `return` de sala vazia — senão as barras
+  // continuariam flutuando sobre o painel de "ninguém na sala".
+  $('app').classList.toggle('cheia', noPalco && telaCheia);
   $('fullscreen').classList.toggle('on', telaCheia);
   // A dica e o nome acessível andam juntos: o botão faz duas coisas conforme o
   // estado, e anunciar sempre a mesma coisa mentiria para quem usa leitor.
@@ -2095,6 +2100,30 @@ $('settings').addEventListener('click', () => {
   panel.hidden = !panel.hidden;
   $('settings').classList.toggle('on', !panel.hidden);
 });
+
+/**
+ * As barras somem depois de um tempo com o cursor parado, e voltam ao primeiro
+ * movimento. Só têm efeito em tela cheia, onde elas flutuam sobre o vídeo — no
+ * modo normal ocupam faixa própria e não há nada a desobstruir.
+ *
+ * O relógio corre sempre, mesmo fora da tela cheia: um `if` aqui pagaria uma
+ * consulta ao estado a cada movimento do mouse para poupar um setTimeout, e
+ * quem decide se a classe pinta alguma coisa já é o CSS.
+ */
+const OCIO = 2500;
+let ocioso = null;
+
+function acordarBarras() {
+  $('app').classList.remove('ocioso');
+  clearTimeout(ocioso);
+  ocioso = setTimeout(() => $('app').classList.add('ocioso'), OCIO);
+}
+
+// pointerdown junto com o movimento: em tela sensível ao toque não há mousemove
+// nenhum, e sem isto as barras sumiriam para sempre no primeiro silêncio.
+window.addEventListener('mousemove', acordarBarras);
+window.addEventListener('pointerdown', acordarBarras);
+acordarBarras();
 
 // O estado visual do botão é decidido por renderGrid, que é quem sabe se há
 // tela no palco — aqui só se troca a intenção.

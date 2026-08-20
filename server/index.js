@@ -801,7 +801,7 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
 
-  // A fonte não vai assinada, como `q`, `fps` e `som` também não vão: ela não
+  // A fonte não vai assinada, como `q` e `fps` também não vão: ela não
   // concede nada. Quem tem o token já pode transmitir nesta sala — a fonte só
   // rotula o stream e escolhe qual das duas vagas da pessoa é ocupada, e o teto
   // por pessoa é imposto no registro, não aqui.

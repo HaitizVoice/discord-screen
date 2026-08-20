@@ -338,29 +338,30 @@ export function createBroadcaster({
    * pede em opcoesCaptura, e é o que destrava transmitir um jogo com o som do
    * jogo, que antes era impossível por aqui.
    *
-   * Fora dessas duas a faixa morre aqui, antes de sair da máquina. E quando
-   * nenhuma faixa chega apesar de terem pedido som, o caso também acende o
-   * `somBloqueado`: "veio sem som" precisa levar à mesma saída que "o som foi
-   * barrado", senão o aviso vira um beco.
+   * Fora dessas duas a faixa morre aqui, antes de sair da máquina — e aí sim
+   * acende o `somBloqueado`, porque veio som e ele foi barrado.
+   *
+   * Vir sem faixa nenhuma é silêncio, não erro: o som é sempre pedido, e é a
+   * caixa "Compartilhar o áudio" do seletor que decide. Quem a deixou desmarcada
+   * escolheu transmitir sem som, e avisar disso seria acusar a escolha.
    */
   function prepararSom(videoTrack, capturado) {
     if (!audio) return null;
 
     const faixa = capturado.getAudioTracks()[0];
-    const superficie = videoTrack.getSettings?.().displaySurface;
+    if (!faixa) return null;
 
-    if (faixa && somIsolado(superficie)) {
+    const superficie = videoTrack.getSettings?.().displaySurface;
+    if (somIsolado(superficie)) {
       somBloqueado = false;
       return faixa;
     }
 
-    if (faixa) {
-      faixa.stop();
-      capturado.removeTrack(faixa);
-    }
+    faixa.stop();
+    capturado.removeTrack(faixa);
 
     somBloqueado = true;
-    onAviso?.(avisoSemSom(superficie, Boolean(faixa)));
+    onAviso?.(avisoSemSom(superficie));
     return null;
   }
 
@@ -370,13 +371,12 @@ export function createBroadcaster({
     return superficie === 'window' && somDeJanelaConfiavel();
   }
 
-  /** Por que esta captura ficou sem som, e por onde sair disso. */
-  function avisoSemSom(superficie, tinhaFaixa) {
+  /** Por que o som que veio foi barrado, e por onde sair disso. */
+  function avisoSemSom(superficie) {
     const saida = ' Ou use "Som de uma aba ou janela" para escolher a fonte.';
 
-    // Só é falta de suporte quando o navegador não sabe isolar. Com suporte,
-    // janela sem faixa é a caixa de áudio desmarcada — cai no caso genérico.
-    if (superficie === 'window' && !somDeJanelaConfiavel()) {
+    // Janela só chega aqui quando o navegador não sabe escopar o som a ela.
+    if (superficie === 'window') {
       return (
         'Este navegador não isola o som por janela, e o som do computador traria o Discord ' +
         'junto. Transmitindo sem som.' + saida
@@ -391,10 +391,7 @@ export function createBroadcaster({
         'Transmitindo sem som.' + comoLevar + saida
       );
     }
-    if (tinhaFaixa) {
-      return 'Não deu para confirmar de onde vinha esse som, então ele foi removido.' + saida;
-    }
-    return 'A captura veio sem som — a caixa de compartilhar áudio ficou desmarcada.' + saida;
+    return 'Não deu para confirmar de onde vinha esse som, então ele foi removido.' + saida;
   }
 
   /**

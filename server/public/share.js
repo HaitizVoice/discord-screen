@@ -39,26 +39,12 @@ const TITULO = document.title;
 const opcoes = {
   bitrate: Number(query.get('q')) || 2_500_000,
   fps: Number(query.get('fps')) || 30,
-  som: query.get('som') === '1',
 };
 
 function aplicarOpcoes(novas) {
   if (!novas) return;
   if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
   if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
-  if (novas.som !== undefined) opcoes.som = novas.som === '1';
-  mostrarNota();
-}
-
-/** A nota da tela, único texto que ainda depende das opções. */
-function mostrarNota() {
-  // Só aparece quando há instrução a dar — e só há com som ligado, onde existe
-  // uma caixa para marcar na janela que o navegador abre.
-  const nota = $('tela-nota');
-  nota.hidden = !opcoes.som;
-  nota.textContent = opcoes.som
-    ? 'Marque também "Compartilhar o áudio" na janela que o navegador abrir — sem isso ele entrega a tela sem som. O som vem da aba ou da janela escolhida: para levar o som de um jogo, compartilhe o jogo como janela, não a tela inteira.'
-    : '';
 }
 
 const paineis = {};
@@ -123,8 +109,8 @@ document.addEventListener('visibilitychange', () => {
 /**
  * A configuração mudou na engrenagem da atividade.
  *
- * Vale na hora para o que já está no ar — menos o som, que é decidido no
- * momento da captura e só mudaria escolhendo a tela de novo.
+ * Vale na hora para o que já está no ar. O som não passa por aqui: ele é
+ * decidido no seletor do navegador, na hora da captura.
  */
 function aplicarConfig(novas) {
   aplicarOpcoes(novas);
@@ -295,7 +281,7 @@ function criarPainel(fonte) {
   async function verTela() {
     try {
       const s = await navigator.mediaDevices.getDisplayMedia(
-        opcoesTela({ fps: opcoes.fps, comSom: opcoes.som })
+        opcoesTela({ fps: opcoes.fps, comSom: true })
       );
       pararPrevia();
       mostrarPrevia(s);
@@ -385,7 +371,7 @@ function criarPainel(fonte) {
       wsUrl: `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&fonte=${fonte}`,
       bitrate: opcoes.bitrate,
       fps: opcoes.fps,
-      audio: !camera && opcoes.som,
+      audio: !camera,
       fonte,
       // A prévia já pagou o gesto do usuário e a permissão: reaproveitá-la é o
       // que evita o seletor de tela abrir uma segunda vez para o mesmo
@@ -403,11 +389,7 @@ function criarPainel(fonte) {
         el('elapsed').textContent =
           `${String(Math.floor(s.seconds / 60)).padStart(2, '0')}:${String(s.seconds % 60).padStart(2, '0')}`;
       },
-      onAviso: (msg) => {
-        setStatus(msg, 'aviso');
-        // O aviso sozinho é um beco: o botão é a saída dele.
-        if (!camera) $('somAba').hidden = false;
-      },
+      onAviso: (msg) => setStatus(msg, 'aviso'),
       onEnd: (reason) => {
         broadcaster = null;
         mostrarSetup();
@@ -428,6 +410,9 @@ function criarPainel(fonte) {
       el('preview').play().catch(() => {});
       el('setup').hidden = true;
       el('live').hidden = false;
+      // A tela sempre pede som, e a caixa do seletor pode ter ficado desmarcada:
+      // a saída fica à mão desde o início, em vez de só depois de um aviso.
+      if (!camera) $('somAba').hidden = false;
       chamar(null);
     } catch (err) {
       broadcaster = null;
@@ -500,8 +485,6 @@ if (!payload) {
 } else if (missing) {
   falhar('Navegador sem suporte.', missing);
 } else {
-  mostrarNota();
-
   for (const f of FONTES) paineis[f] = criarPainel(f);
   ligarControle();
 

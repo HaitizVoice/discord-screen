@@ -1160,33 +1160,6 @@ button {
   font: inherit;
 }
 
-/* A caixa de marcar alinha pelo topo: o texto de apoio quebra em duas linhas e
-   centralizar deixaria a marca flutuando no meio da frase. */
-.field-check {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin: 16px 0 4px;
-  font-size: 13.5px;
-  color: var(--text);
-  cursor: pointer;
-}
-
-.field-check input {
-  width: 17px;
-  height: 17px;
-  margin: 1px 0 0;
-  flex: 0 0 auto;
-  accent-color: var(--accent);
-}
-
-.field-check .opt {
-  display: block;
-  margin-top: 3px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 .modal-note {
   margin: 16px 0 0;
   padding: 10px 12px;

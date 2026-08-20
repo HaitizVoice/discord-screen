@@ -781,7 +781,6 @@ function renderBar() {
   const cameraNoAr = minhas.has('camera');
 
   const btn = $('share');
-  btn.classList.toggle('go', !telaNoAr);
   btn.classList.toggle('live', telaNoAr);
   btn.disabled = false;
 
@@ -789,9 +788,9 @@ function renderBar() {
   btn.dataset.tip = rotuloShare;
   btn.setAttribute('aria-label', rotuloShare);
 
-  // A câmera tem botão próprio, com o mesmo par ligar/desligar da tela. Sem
-  // "go": duas ações em destaque na mesma barra disputariam a atenção, e a
-  // principal continua sendo a tela.
+  // A câmera tem botão próprio, com o mesmo par ligar/desligar da tela — e a
+  // mesma aparência: são a mesma ação em duas fontes, e pintar só uma delas
+  // dizia que a outra era secundária.
   const cam = $('camera');
   cam.classList.toggle('live', cameraNoAr);
   const rotuloCam = cameraNoAr ? 'Desligar câmera' : 'Ligar câmera';
@@ -1690,30 +1689,55 @@ function opcoesDaFonte(fonte) {
  * coisas. A aba resolve o que dá — câmera ela liga sozinha, tela precisa do
  * clique lá, porque getDisplayMedia exige gesto do usuário.
  */
+/** Nome da aba de captura, para reencontrá-la em vez de empilhar outra. */
+const JANELA_CAPTURA = 'discord-screen-captura';
+
 function ligarFonte(fonte) {
-  if (abaAberta()) {
-    // As opções vão no pedido: a aba pode estar aberta desde antes da última
-    // vez que a engrenagem foi mexida.
-    ws?.send(
-      JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte(fonte) })
-    );
-    toast(
-      fonte === 'camera'
-        ? 'Pedi para a sua aba de transmissão ligar a câmera. Se ela pedir permissão, autorize por lá.'
-        : 'Sua aba de transmissão já está aberta — o clique para escolher a tela tem de ser lá.'
-    );
-    return;
-  }
+  if (abaAberta()) return trazerAba(fonte);
   abrirCaptura(fonte);
 }
 
 /**
- * Abre a captura, aqui dentro se der e na aba se não der.
+ * A aba de captura já existe: leva a pessoa até ela.
  *
- * Sem modal no meio: as opções já foram decididas na engrenagem, e perguntar de
- * novo a cada início era o passo que sobrava entre querer mostrar a tela e
- * mostrá-la.
+ * O pedido pelo WebSocket sozinho não resolvia. Ele chega, a aba atende — mas
+ * em segundo plano, onde ninguém vê, e uma aba não consegue se trazer para a
+ * frente. Avisar por toast que ela existe deixava a pessoa procurando entre as
+ * janelas qual era.
  */
+function trazerAba(fonte) {
+  // Dentro do Discord a aba foi parar no navegador do sistema, que é outro
+  // processo: daqui não há como focá-la. Abrir de novo é o que existe, e a
+  // fonte vai na URL, então a aba nova já nasce no que se pediu. Se a antiga
+  // continuar aberta, ficam duas — é o preço da fronteira entre os processos.
+  if (inDiscord) return abrirLink(fonte);
+
+  // Fora do Discord a aba é nossa, e o nome fixo a encontra. String vazia de
+  // propósito: passar a URL faria o navegador *navegar* nela, e navegar é
+  // recarregar — mataria a transmissão que estiver no ar ali dentro.
+  const aba = window.open('', JANELA_CAPTURA);
+  if (!aba) return abrirLink(fonte);
+
+  // `window.open('')` num nome que não existe cria uma aba em branco em vez de
+  // achar alguma. Aí ela precisa ser levada para o lugar certo.
+  let emBranco = false;
+  try {
+    emBranco = aba.location.href === 'about:blank';
+  } catch {
+    /* já navegou para outra origem: é a aba de captura mesmo */
+  }
+  if (emBranco) {
+    aba.location.href = urlDaCaptura(fonte).toString();
+    aba.focus();
+    return;
+  }
+
+  aba.focus();
+  // A URL não mudou, então o pedido tem de ir por fora dela. As opções vão
+  // junto: a aba pode estar aberta desde antes da última mexida na engrenagem.
+  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte(fonte) }));
+}
+
 async function abrirCaptura(fonte) {
   if (!roomTokens) return;
 
@@ -1721,15 +1745,26 @@ async function abrirCaptura(fonte) {
   // no iframe, então a câmera vai direto para a aba.
   if (fonte === 'tela' && (await broadcastFromHere())) return;
 
+  abrirLink(fonte);
+}
+
+/** O endereço da página de captura, já com as opções e a fonte pedida. */
+function urlDaCaptura(fonte) {
   const url = new URL(roomTokens.shareUrl);
   for (const [chave, valor] of Object.entries(opcoesDaFonte(fonte))) {
     url.searchParams.set(chave, valor);
   }
   url.searchParams.set('fonte', fonte);
+  return url;
+}
+
+async function abrirLink(fonte) {
+  if (!roomTokens) return;
+  const url = urlDaCaptura(fonte).toString();
 
   if (inDiscord) {
     try {
-      const res = await sdk.commands.openExternalLink({ url: url.toString() });
+      const res = await sdk.commands.openExternalLink({ url });
       // Clientes antigos devolvem null; só tratamos false como recusa explícita.
       if (res?.opened === false) {
         toast('Você recusou abrir o link. Sem isso não dá para capturar a tela.', true);
@@ -1740,7 +1775,7 @@ async function abrirCaptura(fonte) {
     return;
   }
 
-  window.open(url.toString(), '_blank');
+  window.open(url, JANELA_CAPTURA);
 }
 
 /**

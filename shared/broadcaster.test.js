@@ -10,7 +10,7 @@
  * uma faixa de som que traria o Discord de volta em eco, e o que sai no fio.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBroadcaster, fonteIndisponivel, supportError } from './broadcaster.js';
+import { createBroadcaster, fonteIndisponivel, nivelH264, supportError } from './broadcaster.js';
 
 // ------------------------------------------------------------------- dublês
 
@@ -99,6 +99,16 @@ class StreamFalsa {
 let relogioDeCaptura = 0;
 
 /** Um quadro, do tamanho que o teste quiser. */
+/**
+ * O H.264 que estes testes esperam: perfil High no nivel que cabe em 1280x720
+ * a 30 fps, que sao o tamanho e a taxa de telaSimples() com opcoes().
+ *
+ * Escrito assim, e nao como literal solto, porque o nivel e derivado: mudar a
+ * resolucao do duble muda o nome do codec, e um literal deixaria o teste
+ * mentindo sobre o motivo de ter quebrado.
+ */
+const H264 = `avc1.6400${nivelH264(1280, 720, 30).toString(16)}`;
+
 const quadro = (
   displayWidth = 1280,
   displayHeight = 720,
@@ -158,7 +168,7 @@ class VideoEncoderFalso {
   }
 }
 VideoEncoderFalso.isConfigSupported = vi.fn(async (config) => ({
-  supported: config.codec === 'avc1.42E01E' && Boolean(config.avc),
+  supported: config.codec.startsWith('avc1.') && Boolean(config.avc),
   config,
 }));
 
@@ -339,6 +349,50 @@ afterEach(() => {
 
 // ------------------------------------------------------------------- testes
 
+describe('nivelH264', () => {
+  /**
+   * O bug que mais custou nesta base: o nome do codec pedia nivel 3.0 fixo, e
+   * nivel 3.0 aguenta 1620 macroblocos por quadro. Uma tela 1080p tem 8160.
+   * O navegador recusava, a escolha caia em VP8, e VP8 a 1080p nao tem encoder
+   * por hardware — a taxa de quadros caia pela metade e ninguem sabia por que.
+   */
+  it('nao cabe uma tela 1080p no nivel que este arquivo pedia', () => {
+    expect(nivelH264(1920, 1080, 30)).toBeGreaterThan(0x1e);
+  });
+
+  it('escolhe 4.0 para 1080p a 30 quadros', () => {
+    // 8160 macroblocos cabem nos 8192 do nivel 4.0, e 244800 por segundo cabem
+    // nos 245760. Raspando nos dois — dai 60 fps ja nao caber.
+    expect(nivelH264(1920, 1080, 30)).toBe(0x28);
+  });
+
+  it('sobe para 4.2 quando a mesma tela vai a 60 quadros', () => {
+    // O quadro nao mudou; o que estourou foi o teto por segundo.
+    expect(nivelH264(1920, 1080, 60)).toBe(0x2a);
+  });
+
+  it('nao gasta nivel a toa numa camera pequena', () => {
+    // Camera cabia no 3.0 e continua cabendo: pedir mais do que precisa e
+    // arriscar recusa em aparelho fraco sem ganhar nada.
+    expect(nivelH264(640, 480, 30)).toBe(0x1e);
+  });
+
+  it('acompanha a taxa tambem nas resolucoes menores', () => {
+    expect(nivelH264(1280, 720, 30)).toBe(0x1f);
+    expect(nivelH264(1280, 720, 60)).toBe(0x20);
+  });
+
+  it('arredonda o quadro para cima em macroblocos de 16', () => {
+    // 1080 nao e multiplo de 16: sao 68 linhas de macrobloco, nao 67,5. Contar
+    // para baixo daria um nivel que nao cabe, que e o erro original.
+    expect(nivelH264(1920, 1080, 30)).toBe(nivelH264(1920, 1088, 30));
+  });
+
+  it('para no maior nivel que existe em vez de inventar um', () => {
+    expect(nivelH264(7680, 4320, 120)).toBe(0x34);
+  });
+});
+
 describe('supportError', () => {
   it('não reclama de um navegador completo', () => {
     expect(supportError()).toBeNull();
@@ -434,7 +488,7 @@ describe('start', () => {
     const { encoder } = await noAr();
 
     expect(encoder.configuracoes[0]).toMatchObject({
-      codec: 'avc1.42E01E',
+      codec: H264,
       avc: { format: 'annexb' },
       latencyMode: 'realtime',
       bitrate: 2_500_000,
@@ -446,9 +500,7 @@ describe('start', () => {
     const onStatus = vi.fn();
     await noAr({ onStatus });
 
-    expect(onStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ codec: 'avc1.42E01E', direct: true }),
-    );
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ codec: H264, direct: true }));
   });
 
   it('reduz uma tela 4K até o teto de 1920x1080, sem cortar', async () => {
@@ -493,12 +545,12 @@ describe('start', () => {
     VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
       supported:
         config.codec === 'vp8' ||
-        (config.codec === 'avc1.42E01E' && config.bitrateMode === undefined),
+        (config.codec.startsWith('avc1.') && config.bitrateMode === undefined),
     }));
 
     const { encoder } = await noAr();
 
-    expect(encoder.configuracoes[0].codec).toBe('avc1.42E01E');
+    expect(encoder.configuracoes[0].codec).toBe(H264);
     expect(encoder.configuracoes[0]).not.toHaveProperty('bitrateMode');
   });
 
@@ -510,7 +562,7 @@ describe('start', () => {
     const { encoder } = await noAr();
 
     expect(encoder.configuracoes[0]).toMatchObject({
-      codec: 'avc1.42E01E',
+      codec: H264,
       bitrateMode: 'constant',
       latencyMode: 'realtime',
     });
@@ -519,7 +571,7 @@ describe('start', () => {
   it('mantém o tempo real acima do bitrate constante dentro do mesmo codec', async () => {
     VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
       supported:
-        config.codec === 'avc1.42E01E' &&
+        config.codec.startsWith('avc1.') &&
         Boolean(config.avc) &&
         !(config.latencyMode === 'realtime' && config.bitrateMode === 'constant'),
     }));
@@ -677,7 +729,7 @@ describe('quadros', () => {
 
     encoder.output(chunkFalso(), {
       decoderConfig: {
-        codec: 'avc1.42E01E',
+        codec: H264,
         codedWidth: 1280,
         codedHeight: 720,
         description: new Uint8Array([1, 2, 3]).buffer,
@@ -685,7 +737,7 @@ describe('quadros', () => {
     });
 
     const config = ws.mensagens().find((m) => m.type === 'config');
-    expect(config.config).toMatchObject({ codec: 'avc1.42E01E', codedWidth: 1280 });
+    expect(config.config).toMatchObject({ codec: H264, codedWidth: 1280 });
     // AQID é base64 de 0x01 0x02 0x03: a descrição vai binária, não como texto.
     expect(config.config.description).toBe('AQID');
   });

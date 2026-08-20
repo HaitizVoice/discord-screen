@@ -18,15 +18,73 @@ import { iceServers, criarPeer, ajustarEnvio, suportaWebRTC, MORTO } from './rtc
  * ninguém fica sem imagem por causa de um NAT.
  */
 
-// H264 costuma ter encoder por hardware; VP8 quase sempre cai em software, que
-// a 1080p derruba o framerate. Por isso as duas variantes de H264 vêm antes:
-// annexb dispensa o blob `description`, e avcC é aceito onde annexb não é.
-const CANDIDATES = [
-  { codec: 'avc1.42E01E', avc: { format: 'annexb' } },
-  { codec: 'avc1.42E01E' },
-  { codec: 'vp8' },
-  { codec: 'vp09.00.10.08' },
+/**
+ * Níveis do H.264, do mais baixo ao mais alto, com os dois tetos que decidem.
+ *
+ * Nome de codec do H.264 carrega o nível nos dois últimos dígitos, e nível não
+ * é enfeite: é um contrato sobre o tamanho do quadro e sobre quantos
+ * macroblocos por segundo o decodificador precisa aguentar. Pedir um nível que
+ * não cabe faz o navegador recusar a configuração inteira — e, no nosso caso,
+ * cair em VP8, que a 1080p não tem encoder por hardware em máquina nenhuma
+ * comum e derruba a taxa de quadros pela metade.
+ *
+ * Este arquivo pediu `avc1.42E01E` — nível 3.0 — desde sempre. Nível 3.0 aguenta
+ * 1620 macroblocos por quadro, uns 720×576. Uma tela 1080p tem 8160. O H.264
+ * nunca esteve disponível para compartilhamento de tela; só para câmera, que
+ * captura pequeno o bastante para caber. Ninguém tinha por que desconfiar,
+ * porque a transmissão funcionava — só que em software.
+ */
+const NIVEIS_H264 = [
+  { nivel: 0x1e, maxFS: 1620, maxMBPS: 40500 }, // 3.0
+  { nivel: 0x1f, maxFS: 3600, maxMBPS: 108000 }, // 3.1
+  { nivel: 0x20, maxFS: 5120, maxMBPS: 216000 }, // 3.2
+  { nivel: 0x28, maxFS: 8192, maxMBPS: 245760 }, // 4.0 — 1080p30 cabe raspando
+  { nivel: 0x2a, maxFS: 8704, maxMBPS: 522240 }, // 4.2 — 1080p60 pede este
+  { nivel: 0x32, maxFS: 22080, maxMBPS: 589824 }, // 5.0
+  { nivel: 0x33, maxFS: 36864, maxMBPS: 983040 }, // 5.1
+  { nivel: 0x34, maxFS: 36864, maxMBPS: 2073600 }, // 5.2
 ];
+
+/**
+ * Perfis, do que comprime melhor ao que tem encoder em mais lugares.
+ *
+ * High entrega mais imagem no mesmo bitrate e é acelerado por hardware em
+ * qualquer GPU desta década. Baseline fica por último como rede de segurança:
+ * é o que roda onde nada mais roda.
+ */
+const PERFIS_H264 = ['6400', '4d40', '42e0'];
+
+/** O menor nível que aguenta este quadro nesta taxa. */
+export function nivelH264(width, height, fps) {
+  const macroblocos = Math.ceil(width / 16) * Math.ceil(height / 16);
+  const porSegundo = macroblocos * fps;
+  const cabe = NIVEIS_H264.find((n) => macroblocos <= n.maxFS && porSegundo <= n.maxMBPS);
+  // Acima de 5.2 não existe nível para pedir; deixa o navegador recusar e o
+  // VP8 assumir, que é melhor que montar um nome de codec inválido.
+  return (cabe ?? NIVEIS_H264.at(-1)).nivel;
+}
+
+/** Troca o nível de um nome de codec H.264. Devolve os outros intactos. */
+function comNivel(codec, nivel) {
+  if (!codec?.startsWith('avc1.') || codec.length !== 11) return codec;
+  return codec.slice(0, 9) + nivel.toString(16).padStart(2, '0');
+}
+
+/**
+ * Os codecs a tentar, nesta ordem, para este quadro e esta taxa.
+ *
+ * H.264 primeiro porque quase sempre tem encoder por hardware; VP8 e VP9 são a
+ * saída para quem não tem H.264 nenhum. `annexb` vem antes de cada perfil
+ * porque dispensa o blob `description`, e o avcC é aceito onde annexb não é.
+ */
+function candidatos(width, height, fps) {
+  const nivel = nivelH264(width, height, fps).toString(16).padStart(2, '0');
+  const h264 = PERFIS_H264.flatMap((perfil) => {
+    const codec = `avc1.${perfil}${nivel}`;
+    return [{ codec, avc: { format: 'annexb' } }, { codec }];
+  });
+  return [...h264, { codec: 'vp8' }, { codec: 'vp09.00.10.08' }];
+}
 
 /**
  * Quão longe da marca da grade um quadro ainda serve para aquela marca.
@@ -602,7 +660,7 @@ export function createBroadcaster({
     // troca de cena ele estoura o alvo com folga, e a rajada é justamente o que
     // entope o relay. Constante troca qualidade em cena difícil por um teto que
     // se cumpre.
-    for (const candidate of CANDIDATES) {
+    for (const candidate of candidatos(width, height, fps)) {
       for (const realtime of [true, false]) {
         for (const constante of [true, false]) {
           const cfg = { ...candidate, width, height, bitrate, framerate: fps };
@@ -808,8 +866,26 @@ export function createBroadcaster({
     const target = fitWithin(sw, sh);
 
     if (target.width !== config.width || target.height !== config.height) {
-      config = { ...config, ...target };
-      encoder.configure(config);
+      // O nível acompanha o tamanho. Uma janela de 720p que vira 1080p no meio
+      // da transmissão passa a precisar de um nível acima, e reconfigurar com o
+      // antigo é pedir um quadro que não cabe no contrato — exatamente o erro
+      // que fazia a tela cair para VP8, agora com a transmissão no ar.
+      const anterior = config;
+      config = {
+        ...config,
+        ...target,
+        codec: comNivel(config.codec, nivelH264(target.width, target.height, fps)),
+      };
+
+      try {
+        encoder.configure(config);
+      } catch (err) {
+        // Nível novo recusado: seguir com o tamanho velho entrega imagem
+        // esticada, mas entrega. Parar aqui não entregaria nada.
+        console.warn('[encoder] nivel recusado, mantendo a configuracao anterior:', err.message);
+        config = anterior;
+        return;
+      }
       wantKeyframe = true;
       onStatus?.({
         codec: config.codec,

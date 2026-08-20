@@ -92,6 +92,28 @@ describe('cabeçalhos', () => {
     expect(csp).toContain('https://discord.com');
   });
 
+  it('desarma o X-Frame-Options que a borda da hospedagem injeta', async () => {
+    // ALLOWALL não existe no padrão de propósito: o navegador descarta o header
+    // inteiro ao ver um valor que não reconhece, e com ele vai embora o
+    // SAMEORIGIN que a hospedagem carimbaria. Quem restringe o iframe continua
+    // sendo o frame-ancestors do CSP.
+    const resposta = await get('/api/health');
+
+    expect(resposta.headers.get('x-frame-options')).toBe('ALLOWALL');
+    expect(resposta.headers.get('cloudflare-frame-options')).toBe('allow');
+  });
+
+  it('não restringe script, estilo ou conexão pelo CSP', async () => {
+    // O CSP daqui existe só para autorizar o iframe. Ganhar um default-src
+    // silenciosamente quebraria hospedagens que servem estático de outro
+    // domínio, e o sintoma seria uma página branca sem erro de servidor.
+    const csp = (await get('/api/health')).headers.get('content-security-policy');
+
+    expect(csp).not.toContain('default-src');
+    expect(csp).not.toContain('script-src');
+    expect(csp).not.toContain('connect-src');
+  });
+
   it('serve a página de captura sem cache', async () => {
     const resposta = await get('/share.html');
 
@@ -108,6 +130,36 @@ describe('cabeçalhos', () => {
 
     expect(resposta.status).toBe(200);
     expect(await resposta.text()).toContain('createBroadcaster');
+  });
+});
+
+describe('prefixo /.proxy da Activity', () => {
+  // Dentro da Activity o caminho pode chegar prefixado. Sem limpar, toda rota
+  // vira 404 e o cliente fica esperando uma resposta que não vem.
+  it('resolve rota de API pedida com o prefixo', async () => {
+    const resposta = await get('/.proxy/api/health');
+
+    expect(resposta.status).toBe(200);
+    expect((await resposta.json()).ok).toBe(true);
+  });
+
+  it('resolve arquivo estático pedido com o prefixo', async () => {
+    expect((await get('/.proxy/share.html')).status).toBe(200);
+  });
+
+  it('a raiz prefixada não vira caminho vazio', async () => {
+    // '/.proxy' sozinho viraria '' sem o fallback, e '' não é um caminho válido.
+    expect((await get('/.proxy')).status).toBe(200);
+  });
+
+  it('não mexe em caminho que só parece prefixado', async () => {
+    // O prefixo é um caminho, não um pedaço de palavra. Cortado por engano,
+    // /.proxyapi/health viraria a rota de API e devolveria JSON; intacto, cai
+    // no catch-all e recebe a página, que é o certo para um caminho que não
+    // existe. O status não distingue os dois — o tipo do corpo, sim.
+    const resposta = await get('/.proxyapi/health');
+
+    expect(resposta.headers.get('content-type')).not.toContain('application/json');
   });
 });
 

@@ -66,25 +66,65 @@ if (ADMIN_ID && !/^[0-9]{15,21}$/.test(ADMIN_ID)) {
 if (ADMIN_ID) startSampling();
 
 const app = express();
+
+// O proxy do Discord entrega as requisições da Activity sob o prefixo /.proxy.
+// Se ele chega até aqui, toda rota vira 404 e o cliente espera para sempre por
+// uma resposta que não vem — o sintoma é o "Está demorando…" do arranque, com
+// o servidor de pé e os logs limpos.
+//
+// Nem sempre chega: depende de como a hospedagem e o mapeamento de URL do
+// portal repassam o caminho. Tirar sempre custa uma comparação de string e faz
+// o servidor funcionar nos dois casos, em vez de depender de qual borda está na
+// frente. Fora da Activity nenhum caminho legítimo começa com /.proxy, então
+// para quem abre o site direto isto é inerte.
+//
+// O mesmo já era feito no upgrade do WebSocket, mais abaixo; faltava no HTTP.
+app.use((req, _res, next) => {
+  // Fronteira de caminho, não de texto: /.proxyable é outra rota, não esta
+  // com sufixo. Sem a barra, ela viraria /able em silêncio.
+  if (req.url === '/.proxy' || req.url.startsWith('/.proxy/')) {
+    req.url = req.url.slice('/.proxy'.length) || '/';
+    // originalUrl junto: é dele que o serve-static monta o Location de um
+    // redirecionamento, e sem atualizar ele mandaria a pessoa de volta ao
+    // caminho prefixado — um salto a mais para chegar no mesmo lugar.
+    req.originalUrl = req.url;
+  }
+  next();
+});
+
 app.use(express.json());
 
 // Uma Activity roda dentro de um iframe em <id>.discordsays.com, que por sua
 // vez está dentro do discord.com. Declarar essa cadeia é o que autoriza o
 // navegador a desenhar a página ali.
 //
-// Vale dizer o que aprendemos tentando hospedar isto num PaaS: se a borda da
-// hospedagem carimbar "X-Frame-Options: SAMEORIGIN" nas respostas, não há nada
-// a fazer daqui. O proxy do Discord repassa o X-Frame-Options da origem e
-// substitui o CSP pelo dele — então o frame-ancestors abaixo nem chega ao
-// navegador, e o que sobra é o carimbo da hospedagem barrando o iframe. O
-// sintoma é cruel: retângulo branco no Discord, log limpo, e o mesmo endereço
-// funcionando quando aberto direto. Se isso reaparecer, o problema é a borda
-// de quem hospeda, não este arquivo.
+// Havia aqui uma nota dizendo que, se a borda da hospedagem carimbasse
+// "X-Frame-Options: SAMEORIGIN", não haveria nada a fazer deste lado. Estava
+// errado, e o custo do engano foi um retângulo branco no Discord com log limpo
+// e o mesmo endereço funcionando quando aberto direto.
+//
+// O frame-ancestors realmente não resolve sozinho: o proxy do Discord repassa o
+// X-Frame-Options da origem sem repassar o nosso CSP, então quem decide é aquele
+// header. Só que dá para desarmá-lo mandando o nosso — "ALLOWALL" não existe no
+// padrão, e é justamente por isso que serve: diante de um valor que não
+// reconhece, o navegador descarta o header inteiro. Isso só funciona onde a
+// borda adiciona o dela apenas quando a origem não mandou nenhum; se ela
+// sobrescrever, aí sim não há conserto daqui.
+//
+// Não é buraco de segurança: quem restringe o embutimento é o frame-ancestors
+// acima, que tem precedência sobre o X-Frame-Options em qualquer navegador
+// atual. O que se perde é uma proteção que este servidor nunca enviou.
+//
+// O Cloudflare-Frame-Options é o pedido explícito para a borda não injetar o
+// dela. Fora de uma borda que o entenda é um header desconhecido, ignorado por
+// navegador e por proxy.
 app.use((_req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
     "frame-ancestors 'self' https://discord.com https://*.discord.com https://*.discordsays.com",
   );
+  res.setHeader('X-Frame-Options', 'ALLOWALL');
+  res.setHeader('Cloudflare-Frame-Options', 'allow');
   next();
 });
 

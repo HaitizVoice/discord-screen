@@ -291,7 +291,11 @@ function renderGrid() {
   if (chegada && activeSlot !== null) {
     const pedida = chegada.slot;
     const alvo = pedida !== null && available.has(pedida) ? pedida : activeSlot;
-    console.info('[sala] assistindo automaticamente', { pedida, alvo, slots: [...available.keys()] });
+    console.info('[sala] assistindo automaticamente', {
+      pedida,
+      alvo,
+      slots: [...available.keys()],
+    });
     // Zerado antes de qualquer coisa: watchSlot renderiza de novo, e a segunda
     // passada não pode reabrir este mesmo caminho.
     const cheia = chegada.cheia;
@@ -1649,7 +1653,13 @@ function connect() {
       const info = available.get(msg.slot);
       if (info) info.config = msg.config;
       if (watching.has(msg.slot)) {
-        openStream(msg.slot, info?.userId ?? msg.slot);
+        // Config nova no meio da transmissao e so troca de resolucao — a tela
+        // compartilhada foi para tela cheia, por exemplo. Recriar o stream aqui
+        // levava o audio junto (closeStream para o AudioContext e zera
+        // s.audio), e o audio-config so e enviado uma vez por transmissao: o
+        // som nunca voltava. startStream ja reconfigura o decoder de video
+        // sozinho, entao o lugar so precisa existir na primeira vez.
+        if (!streams.has(msg.slot)) openStream(msg.slot, info?.userId ?? msg.slot);
         startStream(msg.slot, msg.config);
       }
     } else if (msg.type === 'audio-config') {
@@ -1969,7 +1979,6 @@ $('camera').addEventListener('click', () => {
   ligarFonte('camera');
 });
 
-
 /** Espelha o volume atual no botão e no cursor, sem tocar no áudio. */
 function renderVolume() {
   const pct = Math.round(volume * 100);
@@ -2123,8 +2132,6 @@ function openRoomSettings() {
 $('roomSettings').addEventListener('click', openRoomSettings);
 
 // ----------------------------------------------------------------- painel
-
-
 
 /**
  * As barras somem com o cursor parado e voltam ao primeiro movimento. Valem

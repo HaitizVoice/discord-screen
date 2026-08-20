@@ -712,16 +712,32 @@ describe('som', () => {
     expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/não isola o som por janela/));
   });
 
-  it('avisa quando a captura veio sem faixa de som nenhuma', async () => {
+  it('captura sem faixa de som é silêncio, não erro: nada é avisado', async () => {
     const onAviso = vi.fn();
 
+    // O som é sempre pedido; quem deixou "Compartilhar o áudio" desmarcada
+    // escolheu transmitir sem ele, e avisar seria acusar a escolha.
     const { b } = await noAr(
       { audio: true, onAviso },
       telaSimples({ width: 1280, height: 720, displaySurface: 'browser' }),
     );
 
+    expect(b.somBloqueado()).toBe(false);
+    expect(b.temSom()).toBe(false);
+    expect(onAviso).not.toHaveBeenCalled();
+  });
+
+  it('mas som que chega de uma superfície não confiável é barrado, e isso se avisa', async () => {
+    const onAviso = vi.fn();
+    const stream = new StreamFalsa(
+      new FaixaFalsa('video', { width: 1280, height: 720, displaySurface: undefined }),
+      new FaixaFalsa('audio', { sampleRate: 48_000, channelCount: 2 }),
+    );
+
+    const { b } = await noAr({ audio: true, onAviso }, stream);
+
     expect(b.somBloqueado()).toBe(true);
-    expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/caixa de compartilhar áudio/));
+    expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/de onde vinha esse som/));
   });
 
   it('pede a captura escopando o som à janela e recusando o do sistema', async () => {

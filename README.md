@@ -123,10 +123,8 @@ naquele servidor, o painel mostra o Guild ID sem impedir as outras métricas.
 
 ## Compartilhando com som
 
-Ao clicar em **Compartilhar tela**, marque *Compartilhar o som*.
-
-Na janela que o navegador abre, **escolha uma aba** e marque a caixinha de áudio
-que aparece lá embaixo.
+O som é sempre pedido — não há nada para ligar antes. Na janela que o navegador
+abre, **escolha uma aba** e marque a caixinha de áudio que aparece lá embaixo.
 
 ### Por que só aba?
 
@@ -135,12 +133,12 @@ tocando — inclusive o do Discord. Aí todo mundo na call escuta a própria voz
 volta, com atraso. É insuportável em segundos.
 
 Nenhum navegador consegue tirar um programa específico dessa captura: o som vem
-misturado, é tudo ou nada. Por isso, se você escolher a tela inteira, o programa
-transmite **sem som** — e o botão de engrenagem fica amarelo piscando.
+misturado, é tudo ou nada. Por isso, na tela inteira o navegador nem oferece a
+caixinha de áudio: a transmissão vai **sem som**.
 
 ### Quero mostrar a tela inteira E ter som
 
-Dá. Clique na engrenagem amarela e escolha **"Som de uma aba"**. O vídeo continua
+Dá. Clique na engrenagem e escolha **"Som de uma aba ou janela"**. O vídeo continua
 sendo a tela inteira, e o som passa a vir da aba que você escolher — que é a
 única fonte que não carrega o Discord junto.
 

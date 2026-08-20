@@ -807,7 +807,7 @@ function renderBar() {
   // botões principais para não sobrar sozinha na barra do lobby, onde não há
   // transmissão nenhuma para configurar.
   $('liveSettings').hidden = $('share').hidden;
-  // Pediram som e ele foi barrado: a engrenagem pisca, porque é atrás dela que
+  // Veio som e ele foi barrado: a engrenagem pisca, porque é atrás dela que
   // está a saída. Sem isso o aviso passa no toast e ninguém acha o caminho.
   const somPendente = Boolean(myBroadcast?.somBloqueado?.());
   $('liveSettings').classList.toggle('atencao', somPendente);
@@ -1665,7 +1665,7 @@ function abaAberta() {
  * ficam aqui, e não num modal que aparece antes de cada início, porque decidir
  * qualidade toda vez que se quer mostrar a tela é atrito no caminho curto.
  */
-const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30, som: false };
+const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30 };
 
 let ajustes = (() => {
   try {
@@ -1675,13 +1675,18 @@ let ajustes = (() => {
   }
 })();
 
-/** As opções no formato que a página de captura lê da URL. */
-function opcoesDaFonte(fonte) {
+/**
+ * As opções no formato que a página de captura lê da URL.
+ *
+ * O som não vem aqui: a tela sempre o pede e a câmera nunca, então quem decide
+ * é a caixa "Compartilhar o áudio" do seletor do navegador — que já é uma
+ * escolha. Repetir a pergunta aqui só criava um jeito de a captura ir muda sem
+ * querer, e a câmera não leva o microfone porque a voz já anda pela call.
+ */
+function opcoesDaFonte() {
   return {
     q: String(ajustes.bitrate),
     fps: String(ajustes.fps),
-    // Câmera vai sem som sempre: a voz já anda pela call.
-    som: fonte === 'camera' || !ajustes.som ? '0' : '1',
   };
 }
 
@@ -1739,7 +1744,7 @@ function trazerAba(fonte) {
   aba.focus();
   // A URL não mudou, então o pedido tem de ir por fora dela. As opções vão
   // junto: a aba pode estar aberta desde antes da última mexida na engrenagem.
-  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte(fonte) }));
+  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
 }
 
 async function abrirCaptura(fonte) {
@@ -1755,7 +1760,7 @@ async function abrirCaptura(fonte) {
 /** O endereço da página de captura, já com as opções e a fonte pedida. */
 function urlDaCaptura(fonte) {
   const url = new URL(roomTokens.shareUrl);
-  for (const [chave, valor] of Object.entries(opcoesDaFonte(fonte))) {
+  for (const [chave, valor] of Object.entries(opcoesDaFonte())) {
     url.searchParams.set(chave, valor);
   }
   url.searchParams.set('fonte', fonte);
@@ -1860,7 +1865,6 @@ function openModal(mode) {
   } else {
     $('mQuality').value = String(ajustes.bitrate);
     $('mFps').value = String(ajustes.fps);
-    $('mAudio').checked = ajustes.som;
   }
 
   $('modal').hidden = false;
@@ -1951,7 +1955,7 @@ async function broadcastFromHere() {
     wsUrl: `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(shareToken)}`,
     bitrate: ajustes.bitrate,
     fps: ajustes.fps,
-    audio: ajustes.som,
+    audio: true,
     onAviso: (m) => toast(m, true),
     onEnd: () => {
       myBroadcast = null;
@@ -1999,13 +2003,12 @@ $('modalGo').addEventListener('click', () => {
   ajustes = {
     bitrate: Number($('mQuality').value),
     fps: Number($('mFps').value),
-    som: $('mAudio').checked,
   };
   store('ajustes', JSON.stringify(ajustes));
 
   // A aba precisa saber na hora: ela mostra estas opções e usa a qualidade no
   // que já está no ar. Sem isto o resumo dela envelhecia em silêncio.
-  ws?.send(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte('tela') }));
+  ws?.send(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte() }));
 
   closeModal();
 });

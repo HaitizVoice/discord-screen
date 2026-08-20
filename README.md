@@ -106,6 +106,15 @@ conta e use **Copiar ID do usuário**. Depois acrescente ao `.env`:
 DISCORD_ADMIN_ID=123456789012345678
 ```
 
+Mais de uma pessoa administrando? Separe os IDs por vírgula:
+
+```env
+DISCORD_ADMIN_ID=123456789012345678,987654321098765432
+```
+
+O `SESSION_SECRET` é outra variável, e é dela o aviso de "mínimo 32”: o ID do
+Discord tem 18 dígitos e está certo assim.
+
 Reinicie o servidor e abra `https://seu-dominio.com/admin`. O painel pede login
 pelo Discord e o backend compara a conta confirmada pelo próprio Discord com o
 ID acima. Os endpoints não aceitam um ID enviado pelo navegador e não expõem

@@ -11,9 +11,12 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ADMIN = '123456789012345678';
+const SEGUNDO = '222222222222222222';
 const OUTRO = '987654321098765432';
 
-process.env.DISCORD_ADMIN_ID = ADMIN;
+// Dois IDs separados por vírgula: o painel costuma ter mais de um dono, e por
+// muito tempo só o primeiro entrava.
+process.env.DISCORD_ADMIN_ID = `${ADMIN}, ${SEGUNDO}`;
 process.env.DISCORD_CLIENT_ID = '111111111111111111';
 process.env.DISCORD_CLIENT_SECRET = 'segredo-da-aplicacao';
 process.env.DISCORD_BOT_TOKEN = 'token-do-bot';
@@ -298,6 +301,13 @@ describe('/api/admin/me', () => {
     expect((await get('/api/admin/me', { headers: comoAdmin(OUTRO) })).status).toBe(401);
   });
 
+  it('aceita o segundo ID da lista, não só o primeiro', async () => {
+    const resposta = await get('/api/admin/me', { headers: comoAdmin(SEGUNDO) });
+
+    expect(resposta.status).toBe(200);
+    expect((await resposta.json()).user.id).toBe(SEGUNDO);
+  });
+
   it('recusa um cookie que não é sessão de painel', async () => {
     const disfarce = signToken({ scope: 'identity', uid: ADMIN }, 600);
 
@@ -343,7 +353,7 @@ describe('/api/admin/metrics', () => {
 
     expect(painel.configuration).toMatchObject({
       environment: 'test',
-      adminId: ADMIN,
+      adminIds: [ADMIN, SEGUNDO],
       botConfigured: true,
       sessionSecretConfigured: true,
       publicOrigin: 'https://exemplo.test',

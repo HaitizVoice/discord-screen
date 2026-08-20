@@ -34,7 +34,14 @@ const {
 const PUBLIC_ORIGIN = ORIGEM_CRUA.replace(/[/]+$/, '');
 
 const isProd = NODE_ENV === 'production';
-const ADMIN_ID = String(DISCORD_ADMIN_ID).trim();
+// Mais de uma pessoa administra: separe os IDs por virgula. Um Set porque a
+// unica pergunta feita aqui e "este ID esta na lista".
+const ADMIN_IDS = new Set(
+  String(DISCORD_ADMIN_ID)
+    .split(/[\s,;]+/)
+    .filter(Boolean),
+);
+const TEM_ADMIN = ADMIN_IDS.size > 0;
 const ADMIN_COOKIE = 'discord_screen_admin';
 
 // Falha no arranque, não no primeiro pedido: subir sem segredo significa
@@ -45,7 +52,7 @@ if (isProd && !process.env.SESSION_SECRET) {
   process.exit(1);
 }
 
-if (ADMIN_ID && !process.env.SESSION_SECRET) {
+if (TEM_ADMIN && !process.env.SESSION_SECRET) {
   console.error('ERRO: SESSION_SECRET obrigatorio quando o painel admin esta ligado.');
   process.exit(1);
 }
@@ -54,19 +61,31 @@ if (ADMIN_ID && !process.env.SESSION_SECRET) {
 // curto é adivinhável fora daqui, sem deixar rastro no servidor: quem acertar
 // forja o cookie e entra como dono. O comando de configuração gera 64
 // caracteres; este piso só barra quem editou o .env na mão e pôs qualquer coisa.
-if (ADMIN_ID && process.env.SESSION_SECRET.length < 32) {
-  console.error('ERRO: SESSION_SECRET curto demais para o painel admin (minimo 32 caracteres).');
-  console.error('      Rode "npm run configurar" para gerar um seguro.');
+if (TEM_ADMIN && process.env.SESSION_SECRET.length < 32) {
+  // Nomeia a variavel e desmente o engano que ela ja causou: quem acabou de
+  // preencher o DISCORD_ADMIN_ID le "minimo 32" e conclui que o ID do Discord,
+  // de 18 digitos, e que esta curto. Nao e — sao duas variaveis diferentes.
+  console.error(
+    `ERRO: SESSION_SECRET curto demais (tem ${process.env.SESSION_SECRET.length}, precisa de 32+).`,
+  );
+  console.error('      Nao e o DISCORD_ADMIN_ID: o ID do Discord tem 18 digitos e esta certo.');
+  console.error(
+    `      Gere um: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`,
+  );
   process.exit(1);
 }
 
-if (ADMIN_ID && !/^[0-9]{15,21}$/.test(ADMIN_ID)) {
-  console.error('ERRO: DISCORD_ADMIN_ID invalido. Use o ID numerico da sua conta Discord.');
+for (const id of ADMIN_IDS) {
+  if (/^[0-9]{15,21}$/.test(id)) continue;
+  console.error(`ERRO: DISCORD_ADMIN_ID invalido: "${id}".`);
+  console.error(
+    '      Use o ID numerico da conta Discord (18 digitos). Varios: separe por virgula.',
+  );
   process.exit(1);
 }
 
 // Sem painel, ninguém lê as métricas — então nem começa a medir.
-if (ADMIN_ID) startSampling();
+if (TEM_ADMIN) startSampling();
 
 const app = express();
 
@@ -668,7 +687,7 @@ app.get('/auth/login', (_req, res) => {
 });
 
 app.get('/admin/auth/login', (_req, res) => {
-  if (!ADMIN_ID) return res.redirect('/admin?error=not_configured');
+  if (!TEM_ADMIN) return res.redirect('/admin?error=not_configured');
   if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
     return res.redirect('/admin?error=discord_not_configured');
   }
@@ -712,7 +731,7 @@ app.get('/auth/callback', async (req, res) => {
     }
 
     if (adminFlow) {
-      if (me.id !== ADMIN_ID) return res.redirect('/admin?error=forbidden');
+      if (!ADMIN_IDS.has(me.id)) return res.redirect('/admin?error=forbidden');
 
       const adminSession = signToken(
         {
@@ -792,7 +811,7 @@ function cookieOf(req, name) {
 
 function adminOf(req) {
   const session = verifyToken(cookieOf(req, ADMIN_COOKIE));
-  if (!session || session.scope !== 'admin' || !ADMIN_ID || session.uid !== ADMIN_ID) return null;
+  if (!session || session.scope !== 'admin' || !ADMIN_IDS.has(session.uid)) return null;
   return session;
 }
 
@@ -800,7 +819,7 @@ function requireAdmin(req, res, next) {
   const admin = adminOf(req);
   if (!admin) {
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(401).json({ error: 'admin_required', configured: Boolean(ADMIN_ID) });
+    return res.status(401).json({ error: 'admin_required', configured: TEM_ADMIN });
   }
   req.admin = admin;
   res.setHeader('Cache-Control', 'no-store');
@@ -809,7 +828,7 @@ function requireAdmin(req, res, next) {
 
 app.get('/api/admin/me', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  if (!ADMIN_ID) return res.status(503).json({ configured: false, error: 'not_configured' });
+  if (!TEM_ADMIN) return res.status(503).json({ configured: false, error: 'not_configured' });
   const admin = adminOf(req);
   if (!admin) return res.status(401).json({ configured: true, error: 'admin_required' });
   res.json({
@@ -839,7 +858,7 @@ app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
       publicOrigin: PUBLIC_ORIGIN,
       clientId: DISCORD_CLIENT_ID || null,
       botConfigured: Boolean(DISCORD_BOT_TOKEN),
-      adminId: ADMIN_ID,
+      adminIds: [...ADMIN_IDS],
       sessionSecretConfigured: Boolean(process.env.SESSION_SECRET),
     },
   });
@@ -1219,7 +1238,7 @@ server.listen(PORT, () => {
     console.log('  Para usar dentro do Discord, rode: npm run configurar');
   }
 
-  if (ADMIN_ID) {
+  if (TEM_ADMIN) {
     console.log(`  Painel administrativo: ${local}/admin`);
     if (PUBLIC_ORIGIN !== local) console.log(`  Painel publico: ${PUBLIC_ORIGIN}/admin`);
   } else {

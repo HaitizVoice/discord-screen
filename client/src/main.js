@@ -1926,7 +1926,13 @@ function connect() {
       const info = available.get(msg.slot);
       if (info) info.config = msg.config;
       if (watching.has(msg.slot)) {
-        openStream(msg.slot, info?.userId ?? msg.slot);
+        // Config nova no meio da transmissao e so troca de resolucao — a tela
+        // compartilhada foi para tela cheia, por exemplo. Recriar o stream aqui
+        // levava o audio junto (closeStream para o AudioContext e zera
+        // s.audio), e o audio-config so e enviado uma vez por transmissao: o
+        // som nunca voltava. startStream ja reconfigura o decoder de video
+        // sozinho, entao o lugar so precisa existir na primeira vez.
+        if (!streams.has(msg.slot)) openStream(msg.slot, info?.userId ?? msg.slot);
         startStream(msg.slot, msg.config);
       }
     } else if (msg.type === 'audio-config') {

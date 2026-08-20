@@ -37,7 +37,8 @@ async function perguntar(rotulo, { padrao = '', valida } = {}) {
   }
 }
 
-const encurtar = (texto) => (texto.length > 24 ? `${texto.slice(0, 10)}…${texto.slice(-6)}` : texto);
+const encurtar = (texto) =>
+  texto.length > 24 ? `${texto.slice(0, 10)}…${texto.slice(-6)}` : texto;
 
 // --------------------------------------------------------------------- fluxo
 
@@ -102,7 +103,8 @@ const DISCORD_CLIENT_ID = await perguntar('Client ID', {
 
 const DISCORD_CLIENT_SECRET = await perguntar('Client Secret', {
   padrao: atual.DISCORD_CLIENT_SECRET,
-  valida: (v) => (v.length >= 20 ? null : 'O Secret é bem mais longo que isso. Confira e cole de novo.'),
+  valida: (v) =>
+    v.length >= 20 ? null : 'O Secret é bem mais longo que isso. Confira e cole de novo.',
 });
 
 // Opcional de propósito: sem o token tudo continua funcionando, então travar a
@@ -197,7 +199,9 @@ nota('     Não esqueça o "Save Changes" no rodapé da página.');
 
 linha(`\n  ${cor.forte}3.${cor.fim} Abra este link para instalar a aplicação no seu servidor:`);
 linha();
-linha(`        ${cor.verde}https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}${cor.fim}`);
+linha(
+  `        ${cor.verde}https://discord.com/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}${cor.fim}`,
+);
 
 titulo(`  ${cor.verde}Feito o que está acima, é só rodar:${cor.fim}`);
 linha();

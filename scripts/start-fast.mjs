@@ -71,7 +71,9 @@ async function configurar(atual) {
   const DISCORD_CLIENT_ID = await perguntar('Client ID', {
     padrao: atual.DISCORD_CLIENT_ID,
     valida: (v) =>
-      /^[0-9]{15,21}$/.test(v) ? null : 'O Client ID é só números (uns 19). Confira e cole de novo.',
+      /^[0-9]{15,21}$/.test(v)
+        ? null
+        : 'O Client ID é só números (uns 19). Confira e cole de novo.',
   });
 
   const DISCORD_CLIENT_SECRET = await perguntar('Client Secret', {
@@ -159,7 +161,7 @@ rl.close();
 // `configurar()` pode tê-las acabado de trocar, e `atual` é de antes disso.
 const credenciais = lerEnv();
 contarEntryPoint(
-  await garantirEntryPoint(credenciais.DISCORD_CLIENT_ID, credenciais.DISCORD_CLIENT_SECRET)
+  await garantirEntryPoint(credenciais.DISCORD_CLIENT_ID, credenciais.DISCORD_CLIENT_SECRET),
 );
 
 // -------------------------------------------------------------------- build
@@ -173,7 +175,9 @@ const build = spawnSync(process.execPath, [VITE, 'build'], {
 });
 
 if (build.status !== 0) {
-  linha(`\n${cor.vermelho}  O site não compilou. Rode "npm run build" para ver o erro.${cor.fim}\n`);
+  linha(
+    `\n${cor.vermelho}  O site não compilou. Rode "npm run build" para ver o erro.${cor.fim}\n`,
+  );
   process.exit(1);
 }
 
@@ -196,7 +200,7 @@ function iniciarServidor(origem) {
   acompanhar(
     'servidor',
     cor.azul,
-    spawn(process.execPath, ['server/index.js'], { cwd: RAIZ, stdio: 'pipe', env })
+    spawn(process.execPath, ['server/index.js'], { cwd: RAIZ, stdio: 'pipe', env }),
   );
 }
 
@@ -215,7 +219,9 @@ if (tunel) {
 
   setTimeout(() => {
     if (servidorIniciado || encerrandoAgora()) return;
-    linha(`\n${cor.amarelo}  O túnel demorou a responder — subindo o servidor mesmo assim.${cor.fim}`);
+    linha(
+      `\n${cor.amarelo}  O túnel demorou a responder — subindo o servidor mesmo assim.${cor.fim}`,
+    );
     nota('  Em localhost tudo funciona; só o acesso de fora depende do túnel.');
     iniciarServidor(null);
   }, 45_000).unref();

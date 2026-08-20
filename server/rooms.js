@@ -137,7 +137,7 @@ const chaveDe = (uid, fonte) => `${uid}|${fonte}`;
 /** As transmissões de uma pessoa, de uma fonte só quando `fonte` vem. */
 export function broadcastersOf(room, userId, fonte = null) {
   return [...room.broadcasters.values()].filter(
-    (e) => e.info.id === userId && (!fonte || e.fonte === fonte)
+    (e) => e.info.id === userId && (!fonte || e.fonte === fonte),
   );
 }
 
@@ -264,7 +264,9 @@ export function createRoom({
     return { error: 'Limite de salas abertas atingido. Feche uma antes de criar outra.' };
   }
 
-  const escolhido = String(name ?? '').replace(/\s+/g, ' ').trim();
+  const escolhido = String(name ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
   // Nome é opcional: sem ele, um baseado em quem criou.
   const clean = (escolhido || `Sala de ${ownerName}`).slice(0, MAX_ROOM_NAME);
 
@@ -407,9 +409,7 @@ function derrubarAbandonadas(room, now) {
       type: 'stop-request',
       motivo: 'Você saiu da atividade, então a transmissão parou.',
     });
-    console.log(
-      `[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`
-    );
+    console.log(`[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`);
     detachBroadcaster(room, entry.ws);
   }
 }

@@ -1,3 +1,5 @@
+import { iceServers, criarPeer, ajustarEnvio, suportaWebRTC, MORTO } from './rtc.js';
+
 /**
  * Pipeline de transmissão: captura → codifica → envia.
  *
@@ -5,19 +7,107 @@
  * Discord permite) e a página de captura externa (quando não permite). Uma
  * implementação só — duas cópias divergiriam na primeira correção.
  *
- * Sem WebRTC porque a Activity não tem, e sem MediaRecorder porque o container
- * impõe piso de latência. WebCodecs codifica quadro a quadro e envia direto.
+ * Sem MediaRecorder porque o container impõe piso de latência: WebCodecs
+ * codifica quadro a quadro e envia direto pelo relay.
+ *
+ * Por cima disso, cada espectador ganha uma tentativa de conexão direta por
+ * WebRTC (veja rtc.js). Quando ela fecha, o vídeo daquele espectador para de
+ * passar pelo relay e passa a sair daqui num transporte que sabe descartar
+ * quadro atrasado em vez de enfileirar. Quando não fecha, nada muda — o
+ * caminho abaixo continua sendo o mesmo de sempre, e é ele que garante que
+ * ninguém fica sem imagem por causa de um NAT.
  */
 
-// H264 costuma ter encoder por hardware; VP8 quase sempre cai em software, que
-// a 1080p derruba o framerate. Por isso as duas variantes de H264 vêm antes:
-// annexb dispensa o blob `description`, e avcC é aceito onde annexb não é.
-const CANDIDATES = [
-  { codec: 'avc1.42E01E', avc: { format: 'annexb' } },
-  { codec: 'avc1.42E01E' },
-  { codec: 'vp8' },
-  { codec: 'vp09.00.10.08' },
+/**
+ * Níveis do H.264, do mais baixo ao mais alto, com os dois tetos que decidem.
+ *
+ * Nome de codec do H.264 carrega o nível nos dois últimos dígitos, e nível não
+ * é enfeite: é um contrato sobre o tamanho do quadro e sobre quantos
+ * macroblocos por segundo o decodificador precisa aguentar. Pedir um nível que
+ * não cabe faz o navegador recusar a configuração inteira — e, no nosso caso,
+ * cair em VP8, que a 1080p não tem encoder por hardware em máquina nenhuma
+ * comum e derruba a taxa de quadros pela metade.
+ *
+ * Este arquivo pediu `avc1.42E01E` — nível 3.0 — desde sempre. Nível 3.0 aguenta
+ * 1620 macroblocos por quadro, uns 720×576. Uma tela 1080p tem 8160. O H.264
+ * nunca esteve disponível para compartilhamento de tela; só para câmera, que
+ * captura pequeno o bastante para caber. Ninguém tinha por que desconfiar,
+ * porque a transmissão funcionava — só que em software.
+ */
+const NIVEIS_H264 = [
+  { nivel: 0x1e, maxFS: 1620, maxMBPS: 40500 }, // 3.0
+  { nivel: 0x1f, maxFS: 3600, maxMBPS: 108000 }, // 3.1
+  { nivel: 0x20, maxFS: 5120, maxMBPS: 216000 }, // 3.2
+  { nivel: 0x28, maxFS: 8192, maxMBPS: 245760 }, // 4.0 — 1080p30 cabe raspando
+  { nivel: 0x2a, maxFS: 8704, maxMBPS: 522240 }, // 4.2 — 1080p60 pede este
+  { nivel: 0x32, maxFS: 22080, maxMBPS: 589824 }, // 5.0
+  { nivel: 0x33, maxFS: 36864, maxMBPS: 983040 }, // 5.1
+  { nivel: 0x34, maxFS: 36864, maxMBPS: 2073600 }, // 5.2
 ];
+
+/**
+ * Perfis, do que comprime melhor ao que tem encoder em mais lugares.
+ *
+ * High entrega mais imagem no mesmo bitrate e é acelerado por hardware em
+ * qualquer GPU desta década. Baseline fica por último como rede de segurança:
+ * é o que roda onde nada mais roda.
+ */
+const PERFIS_H264 = ['6400', '4d40', '42e0'];
+
+/** O menor nível que aguenta este quadro nesta taxa. */
+export function nivelH264(width, height, fps) {
+  const macroblocos = Math.ceil(width / 16) * Math.ceil(height / 16);
+  const porSegundo = macroblocos * fps;
+  const cabe = NIVEIS_H264.find((n) => macroblocos <= n.maxFS && porSegundo <= n.maxMBPS);
+  // Acima de 5.2 não existe nível para pedir; deixa o navegador recusar e o
+  // VP8 assumir, que é melhor que montar um nome de codec inválido.
+  return (cabe ?? NIVEIS_H264.at(-1)).nivel;
+}
+
+/** Troca o nível de um nome de codec H.264. Devolve os outros intactos. */
+function comNivel(codec, nivel) {
+  if (!codec?.startsWith('avc1.') || codec.length !== 11) return codec;
+  return codec.slice(0, 9) + nivel.toString(16).padStart(2, '0');
+}
+
+/**
+ * Os codecs a tentar, nesta ordem, para este quadro e esta taxa.
+ *
+ * H.264 primeiro porque quase sempre tem encoder por hardware; VP8 e VP9 são a
+ * saída para quem não tem H.264 nenhum. `annexb` vem antes de cada perfil
+ * porque dispensa o blob `description`, e o avcC é aceito onde annexb não é.
+ */
+function candidatos(width, height, fps) {
+  const nivel = nivelH264(width, height, fps).toString(16).padStart(2, '0');
+  const h264 = PERFIS_H264.flatMap((perfil) => {
+    const codec = `avc1.${perfil}${nivel}`;
+    return [{ codec, avc: { format: 'annexb' } }, { codec }];
+  });
+  return [...h264, { codec: 'vp8' }, { codec: 'vp09.00.10.08' }];
+}
+
+/**
+ * Quão longe da marca da grade um quadro ainda serve para aquela marca.
+ *
+ * Meio intervalo para cada lado, e meio não é chute: é a maior tolerância que
+ * ainda escolhe um quadro só por marca. Mais que isso e dois quadros disputam
+ * a mesma vaga; menos e o tremor normal da captura passa a derrubar quadro bom.
+ *
+ * Este número já foi 15% do intervalo, e foi um erro caro. A 30 fps sobravam
+ * 5 ms de folga e ninguém via nada; a 60 fps sobravam 2,5 — menos que o tremor
+ * da própria captura de tela. O freio passou a derrubar quadros ao acaso, e a
+ * taxa virou cara ou coroa entre 60 e 30. Era isso que fazia 60 fps tremer.
+ */
+const TOLERANCIA_GRADE = 0.5;
+
+/**
+ * Salto que denuncia relógio de origem novo, em intervalos.
+ *
+ * Trocar de tela, ou uma aba que dormiu e voltou, traz timestamps de outra
+ * régua. Quatro intervalos é mais que qualquer engasgo de rede e menos que
+ * qualquer troca de fonte de verdade.
+ */
+const GRADE_PERDIDA = 4;
 
 // Keyframe periódico: seguro barato para quem reconecta fora do fluxo normal.
 const KEYFRAME_EVERY_MS = 3000;
@@ -138,6 +228,9 @@ export function fonteIndisponivel(fonte) {
  */
 export function createBroadcaster({
   wsUrl,
+  // Prefixo das rotas HTTP. Dentro da Activity tudo passa por /.proxy, e é daí
+  // que vem a lista de servidores ICE.
+  apiBase = '',
   bitrate,
   fps,
   audio = false,
@@ -166,12 +259,31 @@ export function createBroadcaster({
   let stage = null;
   let stageCtx = null;
 
+  // Uma conexão direta por espectador. O servidor nomeia cada um; aqui o nome
+  // é só a chave — quem é a pessoa não interessa para negociar transporte.
+  const peers = new Map(); // peerId -> RTCPeerConnection
+  // Quadros ainda precisam subir pelo relay? Falso só quando todo mundo que
+  // assiste está na conexão direta, e o servidor é quem sabe disso.
+  let enviarChunks = true;
+  // Antes do primeiro config, pausar deixaria quem chegasse depois sem como
+  // montar o decodificador: o servidor guarda o config, mas só depois de vê-lo.
+  let configEnviada = false;
+
   let running = false;
   let mySlot = 0;
   let wantKeyframe = true;
   let lastKeyframeAt = 0;
   let srcW = 0;
   let srcH = 0;
+  // Próxima marca da grade de ritmo, em ms do relógio da captura. Null recomeça
+  // a grade no quadro seguinte — é o que reinicia o ritmo depois de trocar de
+  // tela ou de taxa, quando a régua anterior não vale mais.
+  let proximaMarca = null;
+  // Encoder em apuros. Ver a histerese no encodeFrame.
+  let afogado = false;
+  // Quantos quadros a captura entregou, contra quantos foram codificados. A
+  // diferença entre os dois é o diagnóstico deste bloco.
+  let framesEntrada = 0;
   let startedAt = 0;
   let bytes = 0;
   let frames = 0;
@@ -232,11 +344,16 @@ export function createBroadcaster({
       onStats?.({
         viewers,
         fps: frames,
+        // A taxa que a captura está entregando de verdade. Quando ela está bem
+        // acima da escolhida, é a tela que ignorou a restrição — e sem o freio
+        // do encodeFrame seria esse o fator pelo qual a saída passaria do alvo.
+        fpsEntrada: framesEntrada,
         mbps: (bytes * 8) / 1e6,
         seconds: Math.floor((Date.now() - startedAt) / 1000),
       });
       bytes = 0;
       frames = 0;
+      framesEntrada = 0;
     }, 1000);
 
     pump(track);
@@ -526,17 +643,35 @@ export function createBroadcaster({
   }
 
   async function pickConfig(width, height) {
-    // Duas passadas: navegadores que não conhecem `latencyMode` podem recusar a
-    // configuração inteira por causa dela. Mais latência é melhor que nada.
-    for (const realtime of [true, false]) {
-      for (const candidate of CANDIDATES) {
-        const cfg = { ...candidate, width, height, bitrate, framerate: fps };
-        if (realtime) cfg.latencyMode = 'realtime';
-        try {
-          const { supported } = await VideoEncoder.isConfigSupported(cfg);
-          if (supported) return cfg;
-        } catch {
-          // candidato inválido neste navegador; tenta o próximo
+    // O codec por fora, as opções por dentro. A ordem é a decisão inteira desta
+    // função, e inverter os laços custou caro uma vez: com as opções por fora,
+    // um H.264 que recusasse `bitrateMode` perdia para um VP8 que o aceitasse —
+    // e VP8 em 1080p não tem encoder por hardware em máquina nenhuma comum.
+    // Trocar o chip de vídeo pela CPU para não abrir mão de uma opção de
+    // bitrate derruba a taxa de quadros pela metade. Degrada-se a opção antes
+    // de degradar o codec.
+    //
+    // Dentro de um codec, `latencyMode` vem antes de `bitrateMode` porque
+    // atraso é o que este programa existe para não ter; o teto de bitrate é o
+    // segundo prêmio.
+    //
+    // `bitrateMode: 'constant'` ainda importa. O padrão é `variable`, e em VBR
+    // o controlador de taxa trata o `bitrate` como média de longo prazo — numa
+    // troca de cena ele estoura o alvo com folga, e a rajada é justamente o que
+    // entope o relay. Constante troca qualidade em cena difícil por um teto que
+    // se cumpre.
+    for (const candidate of candidatos(width, height, fps)) {
+      for (const realtime of [true, false]) {
+        for (const constante of [true, false]) {
+          const cfg = { ...candidate, width, height, bitrate, framerate: fps };
+          if (realtime) cfg.latencyMode = 'realtime';
+          if (constante) cfg.bitrateMode = 'constant';
+          try {
+            const { supported } = await VideoEncoder.isConfigSupported(cfg);
+            if (supported) return cfg;
+          } catch {
+            // candidato inválido neste navegador; tenta o próximo
+          }
         }
       }
     }
@@ -625,11 +760,67 @@ export function createBroadcaster({
       frame.close();
       return false;
     }
-    // Backpressure: fila no encoder vira latência que nunca mais sai.
-    if (encoder.encodeQueueSize > 2) {
+
+    // Todo mundo que assiste está na conexão direta: este quadro não tem para
+    // onde ir. Codificá-lo assim mesmo gastaria CPU e, pior, subida — que é o
+    // recurso que as conexões diretas acabaram de passar a disputar. Volta
+    // sozinho no instante em que alguém precisar do relay de novo.
+    if (!enviarChunks && configEnviada) {
       frame.close();
       return true;
     }
+    framesEntrada++;
+
+    // Backpressure com histerese: entra em apuros com a fila acima de 2 e só
+    // sai quando ela desce a 1.
+    //
+    // A histerese é o que separa uma taxa menor de uma taxa que balança. Com a
+    // carga exatamente em cima do limite — que é onde 60 fps quase sempre fica
+    // — um limiar seco faz o encoder aceitar, atrasar, descartar, alcançar e
+    // aceitar de novo, a cada quadro. Não se vê "menos quadros", vê-se tranco.
+    // Trinta firmes são melhores que quarenta e cinco tremendo.
+    //
+    // Vem antes do ritmo de propósito: quadro que o encoder não tem como
+    // receber não pode consumir uma marca da grade. Era esse detalhe que fazia
+    // o descarte por fila mexer na régua do ritmo e derrubar a taxa junto.
+    if (encoder.encodeQueueSize > (afogado ? 1 : 2)) {
+      afogado = true;
+      frame.close();
+      return true;
+    }
+    afogado = false;
+
+    // Ritmo, medido contra uma grade ideal — e não contra o último aceito.
+    //
+    // O encoder foi configurado para uma taxa e é por ela que reparte os bits:
+    // cada quadro recebe mais ou menos `bitrate / framerate`. Entregar mais
+    // depressa que o combinado não faz ele comprimir mais, faz ele emitir mais
+    // quadros do mesmo tamanho, e a saída passa do alvo pelo fator exato do
+    // excesso. Uma tela de 144 Hz codificada a 30 fps manda quase cinco vezes o
+    // que foi pedido. A restrição `frameRate` da captura deveria segurar isso,
+    // mas ela é um pedido: `getDisplayMedia` a atende quando quer, e
+    // `applyConstraints` numa faixa de tela viva quase nunca.
+    //
+    // Medir contra o último aceito parece a mesma coisa e não é. Um quadro que
+    // chega atrasado leva a régua junto: o seguinte passa a ser cobrado a
+    // partir do atraso dele, o próximo a partir daquele, e a taxa escorrega
+    // para baixo sozinha, sem que nada tenha piorado. Contra a grade, atraso de
+    // um quadro é atraso de um quadro só.
+    const passo = 1000 / fps;
+    const tsMs = (frame.timestamp ?? 0) / 1000;
+
+    if (proximaMarca === null || tsMs < proximaMarca - passo * GRADE_PERDIDA) {
+      proximaMarca = tsMs;
+    }
+    if (tsMs < proximaMarca - passo * TOLERANCIA_GRADE) {
+      frame.close();
+      return true;
+    }
+
+    proximaMarca += passo;
+    // A origem entrega mais devagar que o alvo: a grade não tem por que correr
+    // atrás de marcas que já passaram e que nenhum quadro vai preencher.
+    if (proximaMarca < tsMs) proximaMarca = tsMs + passo;
 
     const timestamp = frame.timestamp ?? performance.now() * 1000;
     syncSize(frame);
@@ -675,8 +866,26 @@ export function createBroadcaster({
     const target = fitWithin(sw, sh);
 
     if (target.width !== config.width || target.height !== config.height) {
-      config = { ...config, ...target };
-      encoder.configure(config);
+      // O nível acompanha o tamanho. Uma janela de 720p que vira 1080p no meio
+      // da transmissão passa a precisar de um nível acima, e reconfigurar com o
+      // antigo é pedir um quadro que não cabe no contrato — exatamente o erro
+      // que fazia a tela cair para VP8, agora com a transmissão no ar.
+      const anterior = config;
+      config = {
+        ...config,
+        ...target,
+        codec: comNivel(config.codec, nivelH264(target.width, target.height, fps)),
+      };
+
+      try {
+        encoder.configure(config);
+      } catch (err) {
+        // Nível novo recusado: seguir com o tamanho velho entrega imagem
+        // esticada, mas entrega. Parar aqui não entregaria nada.
+        console.warn('[encoder] nivel recusado, mantendo a configuracao anterior:', err.message);
+        config = anterior;
+        return;
+      }
       wantKeyframe = true;
       onStatus?.({
         codec: config.codec,
@@ -704,6 +913,7 @@ export function createBroadcaster({
     // O decoderConfig chega no primeiro chunk e sempre que a config muda.
     if (metadata?.decoderConfig) {
       ws.send(JSON.stringify({ type: 'config', config: serializeConfig(metadata.decoderConfig) }));
+      configEnviada = true;
     }
 
     const data = new Uint8Array(chunk.byteLength);
@@ -774,6 +984,12 @@ export function createBroadcaster({
         else if (msg.type === 'state') viewers = msg.viewers;
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
+        else if (msg.type === 'rtc-want') abrirPeer(msg.peer);
+        else if (msg.type === 'rtc') receberRtc(msg.peer, msg.payload);
+        else if (msg.type === 'rtc-bye') fecharPeer(msg.peer);
+        // Ninguém mais depende do relay para esta transmissão (ou voltou a
+        // depender). Ver a nota em encodeFrame.
+        else if (msg.type === 'chunks') enviarChunks = msg.on !== false;
         else if (msg.type === 'stop-request')
           stop(msg.motivo ?? 'Transmissão encerrada pela atividade.');
         else if (msg.type === 'error') {
@@ -800,6 +1016,106 @@ export function createBroadcaster({
   // -------------------------------------------------------------------- parar
 
   // ------------------------------------------------------------ ao vivo
+
+  // ------------------------------------------------------------------ WebRTC
+
+  function enviarRtc(peerId, payload) {
+    if (ws?.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: 'rtc', peer: peerId, payload }));
+  }
+
+  /**
+   * Abre a conexão direta com um espectador e manda a oferta.
+   *
+   * Quem oferece é sempre este lado, porque é este lado que tem a mídia: uma
+   * oferta feita por quem só recebe teria que descrever faixas que ela não tem,
+   * e obrigaria a uma segunda negociação assim que as faixas chegassem.
+   */
+  async function abrirPeer(peerId) {
+    if (!peerId || !suportaWebRTC() || !stream || peers.has(peerId)) return;
+
+    try {
+      const ice = await iceServers(apiBase);
+      // O await acima é longo o bastante para a transmissão ter acabado.
+      if (!running || !stream || peers.has(peerId)) return;
+
+      const pc = criarPeer({
+        ice,
+        onIce: (candidate) => enviarRtc(peerId, { kind: 'ice', candidate }),
+        onEstado: (estado) => {
+          if (MORTO.has(estado)) fecharPeer(peerId);
+        },
+      });
+      peers.set(peerId, pc);
+
+      for (const track of stream.getTracks()) pc.addTrack(track, stream);
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      enviarRtc(peerId, { kind: 'offer', sdp: pc.localDescription });
+
+      // Depois do setLocalDescription: antes dele os encodings ainda não
+      // existem, e o ajuste se perderia sem erro nenhum.
+      await ajustarEnvio(pc, { bitrate, fonte, fps });
+    } catch (err) {
+      console.warn('[rtc] oferta falhou:', err.message);
+      fecharPeer(peerId);
+    }
+  }
+
+  async function receberRtc(peerId, payload) {
+    const pc = peers.get(peerId);
+    if (!pc || !payload) return;
+
+    try {
+      if (payload.kind === 'answer' && payload.sdp) {
+        await pc.setRemoteDescription(payload.sdp);
+      } else if (payload.kind === 'ice' && payload.candidate) {
+        await pc.addIceCandidate(payload.candidate);
+      }
+    } catch (err) {
+      // Candidato que chega antes da descrição remota é normal e recuperável;
+      // derrubar a conexão por causa dele custaria uma renegociação inteira.
+      console.warn('[rtc]', err.message);
+    }
+  }
+
+  function fecharPeer(peerId) {
+    const pc = peers.get(peerId);
+    if (!pc) return;
+    peers.delete(peerId);
+    try {
+      pc.close();
+    } catch {
+      // Fechar o que já se fechou lança e não há nada a desfazer.
+    }
+  }
+
+  function fecharPeers() {
+    for (const peerId of [...peers.keys()]) fecharPeer(peerId);
+    enviarChunks = true;
+  }
+
+  /**
+   * Troca a faixa de vídeo das conexões diretas sem renegociar.
+   *
+   * replaceTrack não mexe no SDP: quem assiste continua na mesma conexão e só
+   * vê a imagem mudar. Renegociar aqui custaria um ICE novo por espectador —
+   * segundos de tela parada em troca de nada.
+   */
+  async function trocarNosPeers(novo) {
+    for (const pc of peers.values()) {
+      for (const sender of pc.getSenders()) {
+        if (sender.track?.kind !== novo.kind) continue;
+        try {
+          await sender.replaceTrack(novo);
+        } catch {
+          // Navegador que não troca a faixa segue com a antiga, que morreu com
+          // o stream: aquele espectador cai para o relay pelo caminho normal.
+        }
+      }
+    }
+  }
 
   /**
    * Troca a tela compartilhada sem derrubar a transmissão.
@@ -830,6 +1146,10 @@ export function createBroadcaster({
     srcW = 0;
     srcH = 0;
     wantKeyframe = true;
+    // A tela nova traz o próprio relógio de captura: cobrar da grade antiga
+    // derrubaria quadros por uma diferença que não significa nada.
+    proximaMarca = null;
+    afogado = false;
 
     if (video) {
       video.srcObject = fresh;
@@ -844,13 +1164,22 @@ export function createBroadcaster({
     const novoAudio = prepararSom(track, fresh);
     if (novoAudio && audioEncoder) pumpAudio(novoAudio);
 
+    await trocarNosPeers(track);
+    if (novoAudio) await trocarNosPeers(novoAudio);
+
     return fresh;
   }
 
   /** Ajusta qualidade e taxa de quadros com a transmissão no ar. */
   function setQuality({ bitrate: nextBitrate, fps: nextFps } = {}) {
     if (nextBitrate) bitrate = nextBitrate;
-    if (nextFps) fps = nextFps;
+    // Taxa nova, grade nova: o freio do encodeFrame mede contra a taxa atual, e
+    // subir de 15 para 60 fps precisa valer já no próximo quadro.
+    if (nextFps && nextFps !== fps) {
+      fps = nextFps;
+      proximaMarca = null;
+      afogado = false;
+    }
     if (encoder?.state !== 'configured') return;
 
     config = { ...config, bitrate, framerate: fps };
@@ -863,11 +1192,17 @@ export function createBroadcaster({
       ?.getVideoTracks()[0]
       ?.applyConstraints({ frameRate: { ideal: fps, max: fps } })
       .catch(() => {});
+
+    // O mesmo teto vale para as conexões diretas: sem ele o WebRTC parte de um
+    // chute conservador e leva dezenas de segundos subindo até a qualidade
+    // pedida — que é justamente o que a pessoa acabou de escolher.
+    for (const pc of peers.values()) ajustarEnvio(pc, { bitrate, fonte, fps });
   }
 
   const getSettings = () => ({ bitrate, fps });
 
   function cleanup() {
+    fecharPeers();
     stream?.getTracks().forEach((t) => t.stop());
     stream = null;
     video?.remove();

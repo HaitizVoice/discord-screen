@@ -10,7 +10,7 @@
  * uma faixa de som que traria o Discord de volta em eco, e o que sai no fio.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBroadcaster, fonteIndisponivel, supportError } from './broadcaster.js';
+import { createBroadcaster, fonteIndisponivel, nivelH264, supportError } from './broadcaster.js';
 
 // ------------------------------------------------------------------- dublês
 
@@ -87,8 +87,33 @@ class StreamFalsa {
   }
 }
 
+/**
+ * Relogio de captura dos quadros de mentira, em microssegundos.
+ *
+ * Cada quadro nasce um intervalo de 30 fps depois do anterior, porque e assim
+ * que a captura de verdade entrega: instante de captura nao se repete. Quadros
+ * com o mesmo timestamp sao duplicatas, e o freio de ritmo do encodeFrame
+ * descarta duplicata — com um valor fixo aqui, metade dos testes passaria a
+ * medir o freio em vez do que eles querem medir.
+ */
+let relogioDeCaptura = 0;
+
 /** Um quadro, do tamanho que o teste quiser. */
-const quadro = (displayWidth = 1280, displayHeight = 720, timestamp = 1000) => ({
+/**
+ * O H.264 que estes testes esperam: perfil High no nivel que cabe em 1280x720
+ * a 30 fps, que sao o tamanho e a taxa de telaSimples() com opcoes().
+ *
+ * Escrito assim, e nao como literal solto, porque o nivel e derivado: mudar a
+ * resolucao do duble muda o nome do codec, e um literal deixaria o teste
+ * mentindo sobre o motivo de ter quebrado.
+ */
+const H264 = `avc1.6400${nivelH264(1280, 720, 30).toString(16)}`;
+
+const quadro = (
+  displayWidth = 1280,
+  displayHeight = 720,
+  timestamp = (relogioDeCaptura += 33_333),
+) => ({
   displayWidth,
   displayHeight,
   timestamp,
@@ -120,6 +145,7 @@ let sockets = [];
 let processadores = new Map();
 let capturas = [];
 let capturasPreparadas = [];
+let peers = [];
 
 class VideoEncoderFalso {
   constructor({ output, error }) {
@@ -143,7 +169,7 @@ class VideoEncoderFalso {
   }
 }
 VideoEncoderFalso.isConfigSupported = vi.fn(async (config) => ({
-  supported: config.codec === 'avc1.42E01E' && Boolean(config.avc),
+  supported: config.codec.startsWith('avc1.') && Boolean(config.avc),
   config,
 }));
 
@@ -204,6 +230,63 @@ class SocketFalso {
   }
 }
 SocketFalso.OPEN = 1;
+
+/**
+ * RTCPeerConnection de mentira.
+ *
+ * O broadcaster nao negocia nada sozinho — ele pendura as faixas, pede a
+ * oferta e repassa o que chega. E esse encadeamento que este duble permite
+ * observar, sem precisar de dois navegadores conversando de verdade.
+ */
+class PeerFalso {
+  constructor(config) {
+    this.config = config;
+    this.ouvintes = new Map();
+    this.faixas = [];
+    this.remotas = [];
+    this.candidatos = [];
+    this.senders = [];
+    this.fechado = false;
+    this.localDescription = null;
+    peers.push(this);
+  }
+  addEventListener(nome, fn) {
+    this.ouvintes.set(nome, fn);
+  }
+  disparar(nome, evento) {
+    this.ouvintes.get(nome)?.(evento);
+  }
+  addTrack(track, stream) {
+    this.faixas.push({ track, stream });
+    const sender = {
+      track,
+      getParameters: () => ({ encodings: [{}] }),
+      setParameters: async () => {},
+      substituidas: [],
+      replaceTrack: async (nova) => sender.substituidas.push(nova),
+    };
+    this.senders.push(sender);
+    return sender;
+  }
+  getSenders() {
+    return this.senders;
+  }
+  async createOffer() {
+    return { type: 'offer', sdp: 'v=0 oferta' };
+  }
+  async setLocalDescription(d) {
+    this.localDescription = d;
+  }
+  async setRemoteDescription(d) {
+    this.remotas.push(d);
+  }
+  async addIceCandidate(c) {
+    this.candidatos.push(c);
+  }
+  close() {
+    this.fechado = true;
+  }
+}
 
 class VideoFrameFalso {
   constructor(fonte, { timestamp } = {}) {
@@ -277,6 +360,13 @@ function montarNavegador({ sem = [], restrictOwnAudio = true } = {}) {
   vi.stubGlobal('AudioEncoder', window.AudioEncoder);
   vi.stubGlobal('MediaStreamTrackProcessor', window.MediaStreamTrackProcessor);
   vi.stubGlobal('WebSocket', SocketFalso);
+  vi.stubGlobal('RTCPeerConnection', tem('RTCPeerConnection') ? PeerFalso : undefined);
+  // A lista de servidores ICE vem do servidor. `iceServers` a guarda numa
+  // promessa de modulo, entao esta resposta vale para o arquivo inteiro.
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ ok: true, json: async () => ({ iceServers: [{ urls: 'stun:t' }] }) })),
+  );
 }
 
 const telaSimples = (settings = { width: 1280, height: 720, displaySurface: 'monitor' }) =>
@@ -301,12 +391,14 @@ async function noAr(extra = {}, stream = telaSimples()) {
 }
 
 beforeEach(() => {
+  relogioDeCaptura = 0;
   encoders = [];
   audioEncoders = [];
   sockets = [];
   processadores = new Map();
   capturas = [];
   capturasPreparadas = [];
+  peers = [];
   VideoEncoderFalso.isConfigSupported.mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -322,6 +414,50 @@ afterEach(() => {
 });
 
 // ------------------------------------------------------------------- testes
+
+describe('nivelH264', () => {
+  /**
+   * O bug que mais custou nesta base: o nome do codec pedia nivel 3.0 fixo, e
+   * nivel 3.0 aguenta 1620 macroblocos por quadro. Uma tela 1080p tem 8160.
+   * O navegador recusava, a escolha caia em VP8, e VP8 a 1080p nao tem encoder
+   * por hardware — a taxa de quadros caia pela metade e ninguem sabia por que.
+   */
+  it('nao cabe uma tela 1080p no nivel que este arquivo pedia', () => {
+    expect(nivelH264(1920, 1080, 30)).toBeGreaterThan(0x1e);
+  });
+
+  it('escolhe 4.0 para 1080p a 30 quadros', () => {
+    // 8160 macroblocos cabem nos 8192 do nivel 4.0, e 244800 por segundo cabem
+    // nos 245760. Raspando nos dois — dai 60 fps ja nao caber.
+    expect(nivelH264(1920, 1080, 30)).toBe(0x28);
+  });
+
+  it('sobe para 4.2 quando a mesma tela vai a 60 quadros', () => {
+    // O quadro nao mudou; o que estourou foi o teto por segundo.
+    expect(nivelH264(1920, 1080, 60)).toBe(0x2a);
+  });
+
+  it('nao gasta nivel a toa numa camera pequena', () => {
+    // Camera cabia no 3.0 e continua cabendo: pedir mais do que precisa e
+    // arriscar recusa em aparelho fraco sem ganhar nada.
+    expect(nivelH264(640, 480, 30)).toBe(0x1e);
+  });
+
+  it('acompanha a taxa tambem nas resolucoes menores', () => {
+    expect(nivelH264(1280, 720, 30)).toBe(0x1f);
+    expect(nivelH264(1280, 720, 60)).toBe(0x20);
+  });
+
+  it('arredonda o quadro para cima em macroblocos de 16', () => {
+    // 1080 nao e multiplo de 16: sao 68 linhas de macrobloco, nao 67,5. Contar
+    // para baixo daria um nivel que nao cabe, que e o erro original.
+    expect(nivelH264(1920, 1080, 30)).toBe(nivelH264(1920, 1088, 30));
+  });
+
+  it('para no maior nivel que existe em vez de inventar um', () => {
+    expect(nivelH264(7680, 4320, 120)).toBe(0x34);
+  });
+});
 
 describe('supportError', () => {
   it('não reclama de um navegador completo', () => {
@@ -418,7 +554,7 @@ describe('start', () => {
     const { encoder } = await noAr();
 
     expect(encoder.configuracoes[0]).toMatchObject({
-      codec: 'avc1.42E01E',
+      codec: H264,
       avc: { format: 'annexb' },
       latencyMode: 'realtime',
       bitrate: 2_500_000,
@@ -430,9 +566,7 @@ describe('start', () => {
     const onStatus = vi.fn();
     await noAr({ onStatus });
 
-    expect(onStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ codec: 'avc1.42E01E', direct: true }),
-    );
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ codec: H264, direct: true }));
   });
 
   it('reduz uma tela 4K até o teto de 1920x1080, sem cortar', async () => {
@@ -468,6 +602,50 @@ describe('start', () => {
 
     expect(encoder.configuracoes[0].codec).toBe('vp8');
     expect(encoder.configuracoes[0]).not.toHaveProperty('latencyMode');
+  });
+
+  it('abre mão do bitrate constante antes de abrir mão do codec', async () => {
+    // O caso real: o encoder de hardware do H.264 recusa CBR neste driver, e o
+    // VP8 por software aceita. Escolher pelo CBR trocaria o chip de vídeo pela
+    // CPU, e VP8 em 1080p por software não faz 30 fps.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported:
+        config.codec === 'vp8' ||
+        (config.codec.startsWith('avc1.') && config.bitrateMode === undefined),
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].codec).toBe(H264);
+    expect(encoder.configuracoes[0]).not.toHaveProperty('bitrateMode');
+  });
+
+  it('pede bitrate constante quando o codec preferido aceita', async () => {
+    // Explícito de propósito: `mockClear` no beforeEach limpa as chamadas, não
+    // a implementação, e o teste anterior deixaria a dele valendo aqui.
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async () => ({ supported: true }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0]).toMatchObject({
+      codec: H264,
+      bitrateMode: 'constant',
+      latencyMode: 'realtime',
+    });
+  });
+
+  it('mantém o tempo real acima do bitrate constante dentro do mesmo codec', async () => {
+    VideoEncoderFalso.isConfigSupported.mockImplementation(async (config) => ({
+      supported:
+        config.codec.startsWith('avc1.') &&
+        Boolean(config.avc) &&
+        !(config.latencyMode === 'realtime' && config.bitrateMode === 'constant'),
+    }));
+
+    const { encoder } = await noAr();
+
+    expect(encoder.configuracoes[0].latencyMode).toBe('realtime');
+    expect(encoder.configuracoes[0]).not.toHaveProperty('bitrateMode');
   });
 
   it('encerra quando a pessoa para o compartilhamento pelo navegador', async () => {
@@ -617,7 +795,7 @@ describe('quadros', () => {
 
     encoder.output(chunkFalso(), {
       decoderConfig: {
-        codec: 'avc1.42E01E',
+        codec: H264,
         codedWidth: 1280,
         codedHeight: 720,
         description: new Uint8Array([1, 2, 3]).buffer,
@@ -625,7 +803,7 @@ describe('quadros', () => {
     });
 
     const config = ws.mensagens().find((m) => m.type === 'config');
-    expect(config.config).toMatchObject({ codec: 'avc1.42E01E', codedWidth: 1280 });
+    expect(config.config).toMatchObject({ codec: H264, codedWidth: 1280 });
     // AQID é base64 de 0x01 0x02 0x03: a descrição vai binária, não como texto.
     expect(config.config.description).toBe('AQID');
   });
@@ -662,6 +840,301 @@ describe('quadros', () => {
     await respirar();
 
     expect(encoder.codificados).toHaveLength(0);
+  });
+});
+
+describe('ritmo de entrada', () => {
+  /** Empurra quadros com os instantes de captura dados, em ms. */
+  async function entregar(contexto, instantes) {
+    const track = contexto.stream.getVideoTracks()[0];
+    for (const ms of instantes) {
+      processadorDe(track).empurrar(quadro(1280, 720, Math.round(ms * 1000)));
+      await respirar();
+    }
+  }
+
+  it('deixa passar tudo quando a origem entrega na taxa pedida', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    await entregar(contexto, [0, 33.3, 66.7, 100, 133.3]);
+
+    expect(contexto.encoder.codificados).toHaveLength(5);
+  });
+
+  it('derruba a metade quando a origem entrega o dobro do pedido', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    // 60 Hz num alvo de 30: sem freio, o encoder emitiria o dobro de quadros
+    // com o tamanho de um alvo de 30 — e a saída dobraria o bitrate pedido.
+    await entregar(contexto, [0, 16.7, 33.3, 50, 66.7, 83.3, 100]);
+
+    expect(contexto.encoder.codificados).toHaveLength(4);
+  });
+
+  it('absorve o tremor da captura a 60 fps em vez de derrubar quadro bom', async () => {
+    const contexto = await noAr({ fps: 60 });
+
+    // 60 Hz tremendo uns milissegundos, que é como captura de tela entrega de
+    // verdade. Com a tolerância proporcional antiga — 15% de 16,7 ms — o freio
+    // derrubava metade destes ao acaso, e a taxa virava cara ou coroa.
+    await entregar(contexto, [0, 13.9, 34.2, 49.1, 68.3, 82.6, 101.4]);
+
+    expect(contexto.encoder.codificados).toHaveLength(7);
+  });
+
+  it('não escorrega a taxa quando um quadro chega atrasado', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    // O terceiro chega 12 ms tarde e os seguintes voltam à grade. Medindo
+    // contra o último aceito, o atraso empurraria a régua e derrubaria o
+    // quarto; contra a grade, atraso de um é atraso de um só.
+    await entregar(contexto, [0, 33.3, 78.7, 100, 133.3, 166.7]);
+
+    expect(contexto.encoder.codificados).toHaveLength(6);
+  });
+
+  it('recomeça a grade quando o relógio da origem salta para trás', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    await entregar(contexto, [1000, 1033.3]);
+    // Tela nova, relógio novo: o salto denuncia que a régua antiga não vale.
+    await entregar(contexto, [0, 33.3]);
+
+    expect(contexto.encoder.codificados).toHaveLength(4);
+  });
+});
+
+describe('fila do encoder', () => {
+  async function empurrar(contexto, quantos) {
+    const track = contexto.stream.getVideoTracks()[0];
+    for (let i = 0; i < quantos; i++) {
+      processadorDe(track).empurrar(quadro());
+      await respirar();
+    }
+  }
+
+  it('segura o descarte até a fila esvaziar de verdade', async () => {
+    const contexto = await noAr();
+
+    // Afoga o encoder, e depois devolve a fila ao valor que, sem histerese,
+    // já voltaria a aceitar. Com ela, ainda não: 2 continua sendo apuros.
+    contexto.encoder.encodeQueueSize = 5;
+    await empurrar(contexto, 1);
+    contexto.encoder.encodeQueueSize = 2;
+    await empurrar(contexto, 1);
+
+    expect(contexto.encoder.codificados).toHaveLength(0);
+  });
+
+  it('volta a aceitar quando a fila desce a um', async () => {
+    const contexto = await noAr();
+
+    contexto.encoder.encodeQueueSize = 5;
+    await empurrar(contexto, 1);
+    contexto.encoder.encodeQueueSize = 1;
+    await empurrar(contexto, 1);
+
+    expect(contexto.encoder.codificados).toHaveLength(1);
+  });
+
+  it('o descarte por fila não consome a marca do ritmo', async () => {
+    const contexto = await noAr({ fps: 30 });
+    const track = contexto.stream.getVideoTracks()[0];
+
+    // Um quadro morre na fila e o seguinte vem 20 ms depois — perto demais para
+    // o alvo de 30 fps. Mas o primeiro nunca chegou a ocupar marca nenhuma, a
+    // grade ainda não começou, e é este que a começa. Antes o descarte por fila
+    // já tinha mexido na régua, e este quadro morria por causa de um quadro que
+    // o encoder nem chegou a ver.
+    contexto.encoder.encodeQueueSize = 5;
+    processadorDe(track).empurrar(quadro(1280, 720, 0));
+    await respirar();
+
+    contexto.encoder.encodeQueueSize = 0;
+    processadorDe(track).empurrar(quadro(1280, 720, 20_000));
+    await respirar();
+
+    expect(contexto.encoder.codificados).toHaveLength(1);
+  });
+});
+
+describe('conexão direta', () => {
+  /** Empurra um quadro e deixa o encoder respirar. */
+  async function umQuadro(contexto) {
+    processadorDe(contexto.stream.getVideoTracks()[0]).empurrar(quadro());
+    await respirar();
+  }
+
+  /**
+   * Faz o encoder anunciar a config, que e o que libera a pausa do relay.
+   *
+   * Antes do primeiro config o transmissor se recusa a parar: o servidor guarda
+   * essa config para entregar a quem chegar depois, e pausar antes de manda-la
+   * deixaria o proximo espectador sem como montar o decodificador.
+   */
+  function anunciarConfig(contexto) {
+    contexto.encoder.output(chunkFalso(), {
+      decoderConfig: { codec: H264, codedWidth: 1280, codedHeight: 720 },
+    });
+  }
+
+  it('abre um peer e oferece quando o servidor apresenta um espectador', async () => {
+    // Quem tem a midia e quem oferece: uma oferta feita por quem so recebe
+    // teria que descrever faixas que ela nao tem.
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    expect(peers).toHaveLength(1);
+    expect(peers[0].faixas).toHaveLength(1);
+    expect(ws.mensagens()).toContainEqual({
+      type: 'rtc',
+      peer: 'p1',
+      payload: { kind: 'offer', sdp: { type: 'offer', sdp: 'v=0 oferta' } },
+    });
+  });
+
+  it('repassa o candidato local para o espectador certo', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    peers[0].disparar('icecandidate', { candidate: { toJSON: () => ({ candidate: 'c1' }) } });
+
+    expect(ws.mensagens()).toContainEqual({
+      type: 'rtc',
+      peer: 'p1',
+      payload: { kind: 'ice', candidate: { candidate: 'c1' } },
+    });
+  });
+
+  it('não abre dois peers para o mesmo espectador', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    expect(peers).toHaveLength(1);
+  });
+
+  it('ignora o convite sem nome', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want' });
+    await respirar(8);
+
+    expect(peers).toHaveLength(0);
+  });
+
+  it('não tenta conexão direta onde o navegador não tem WebRTC', async () => {
+    // O relay continua entregando; e para isso que ele nunca foi desligado.
+    montarNavegador({ sem: ['RTCPeerConnection'] });
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    expect(peers).toHaveLength(0);
+    expect(ws.mensagens().some((m) => m.type === 'rtc')).toBe(false);
+  });
+
+  it('aplica a resposta que volta do espectador', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    ws.receber({ type: 'rtc', peer: 'p1', payload: { kind: 'answer', sdp: { type: 'answer' } } });
+    await respirar(4);
+
+    expect(peers[0].remotas).toEqual([{ type: 'answer' }]);
+  });
+
+  it('aplica o candidato que vem do espectador', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    ws.receber({
+      type: 'rtc',
+      peer: 'p1',
+      payload: { kind: 'ice', candidate: { candidate: 'c' } },
+    });
+    await respirar(4);
+
+    expect(peers[0].candidatos).toEqual([{ candidate: 'c' }]);
+  });
+
+  it('ignora sinalização endereçada a um peer que não existe', async () => {
+    const { ws } = await noAr();
+
+    ws.receber({ type: 'rtc', peer: 'fantasma', payload: { kind: 'answer', sdp: {} } });
+    await respirar(4);
+
+    expect(peers).toHaveLength(0);
+  });
+
+  it('fecha o peer quando o espectador vai embora', async () => {
+    const { ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    ws.receber({ type: 'rtc-bye', peer: 'p1' });
+    await respirar();
+
+    expect(peers[0].fechado).toBe(true);
+  });
+
+  it('fecha os peers quando a transmissão acaba', async () => {
+    const { b, ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    b.stop();
+
+    expect(peers[0].fechado).toBe(true);
+  });
+
+  it('para de subir quadros quando ninguém mais depende do relay', async () => {
+    const contexto = await noAr();
+    await umQuadro(contexto);
+    anunciarConfig(contexto);
+    const antes = contexto.encoder.codificados.length;
+    expect(antes).toBeGreaterThan(0);
+
+    // O servidor so manda isto quando todo espectador esta na conexao direta.
+    contexto.ws.receber({ type: 'chunks', on: false });
+    await umQuadro(contexto);
+    await umQuadro(contexto);
+
+    expect(contexto.encoder.codificados).toHaveLength(antes);
+  });
+
+  it('volta a subir quadros assim que alguém precisa do relay de novo', async () => {
+    const contexto = await noAr();
+    await umQuadro(contexto);
+    anunciarConfig(contexto);
+    contexto.ws.receber({ type: 'chunks', on: false });
+    await umQuadro(contexto);
+    const parado = contexto.encoder.codificados.length;
+
+    contexto.ws.receber({ type: 'chunks', on: true });
+    await umQuadro(contexto);
+
+    expect(contexto.encoder.codificados.length).toBeGreaterThan(parado);
+  });
+
+  it('troca a faixa dos peers sem renegociar quando a tela muda', async () => {
+    // replaceTrack nao mexe no SDP: quem assiste segue na mesma conexao e so
+    // ve a imagem mudar. Renegociar custaria um ICE novo por espectador.
+    const { b, ws } = await noAr();
+    ws.receber({ type: 'rtc-want', peer: 'p1' });
+    await respirar(8);
+
+    prepararCaptura(telaSimples());
+    await b.changeScreen();
+    await respirar(4);
+
+    expect(peers[0].senders[0].substituidas).toHaveLength(1);
+    expect(peers[0].fechado).toBe(false);
   });
 });
 

@@ -83,7 +83,7 @@ app.use(express.json());
 app.use((_req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
-    "frame-ancestors 'self' https://discord.com https://*.discord.com https://*.discordsays.com"
+    "frame-ancestors 'self' https://discord.com https://*.discord.com https://*.discordsays.com",
   );
   next();
 });
@@ -98,7 +98,7 @@ app.use(
   express.static(path.join(__dirname, 'public'), {
     extensions: ['html'],
     setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
-  })
+  }),
 );
 
 // Pipeline de transmissão compartilhado com a Activity. Ela o recebe pelo
@@ -107,7 +107,7 @@ app.use(
   '/shared',
   express.static(path.join(__dirname, '..', 'shared'), {
     setHeaders: (res) => res.setHeader('Cache-Control', 'no-store'),
-  })
+  }),
 );
 
 // ------------------------------------------------------------------ OAuth
@@ -122,7 +122,7 @@ app.post('/api/token', async (req, res) => {
   // recusa — e o erro dele não diz qual das duas está errada.
   if (client_id && DISCORD_CLIENT_ID && client_id !== DISCORD_CLIENT_ID) {
     console.error(
-      `[oauth] atividade e da aplicacao ${client_id}, mas o .env tem ${DISCORD_CLIENT_ID}`
+      `[oauth] atividade e da aplicacao ${client_id}, mas o .env tem ${DISCORD_CLIENT_ID}`,
     );
     return res.status(409).json({
       error:
@@ -213,7 +213,7 @@ app.post('/api/session', async (req, res) => {
       me.global_name || me.username,
       me.avatar ?? null,
       8 * 60 * 60,
-      verificado
+      verificado,
     );
 
     res.json({
@@ -246,11 +246,16 @@ app.post('/api/session', async (req, res) => {
 app.post('/api/session-dev', (req, res) => {
   if (isProd) return res.status(404).end();
   const { instance_id = 'dev', name = 'Dev', call = null } = req.body ?? {};
-  res.json(issueIdentity(instance_id, `dev-${name}`, name, null, 8 * 60 * 60, call ? { call } : {}));
+  res.json(
+    issueIdentity(instance_id, `dev-${name}`, name, null, 8 * 60 * 60, call ? { call } : {}),
+  );
 });
 
 app.post('/api/session-guest', (req, res) => {
-  const raw = String(req.body?.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 32);
+  const raw = String(req.body?.name ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 32);
   const name = raw || `Convidado ${Math.floor(Math.random() * 9000 + 1000)}`;
   const uid = `guest-${crypto.randomBytes(8).toString('base64url')}`;
   res.json(issueIdentity(WEB_INSTANCE, uid, name, null, 30 * 24 * 60 * 60));
@@ -313,10 +318,9 @@ async function inVoiceChannel(guildId, channelId, userId) {
   if (!DISCORD_BOT_TOKEN || !guildId || !channelId) return 'indisponivel';
 
   try {
-    const r = await fetch(
-      `https://discord.com/api/v10/guilds/${guildId}/voice-states/${userId}`,
-      { headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` } }
-    );
+    const r = await fetch(`https://discord.com/api/v10/guilds/${guildId}/voice-states/${userId}`, {
+      headers: { Authorization: `Bot ${DISCORD_BOT_TOKEN}` },
+    });
 
     if (r.status === 404) {
       // Dois 404 bem diferentes chegam aqui, e tratá-los igual trancava a
@@ -435,7 +439,7 @@ function issueRoomTokens(roomId, me) {
     roomId,
     viewerToken: signToken({ ...base, role: 'viewer' }),
     shareUrl: `${PUBLIC_ORIGIN}/share.html?t=${encodeURIComponent(
-      signToken({ ...base, role: 'broadcaster' })
+      signToken({ ...base, role: 'broadcaster' }),
     )}`,
   };
 }
@@ -578,7 +582,7 @@ app.get('/admin/auth/login', (_req, res) => {
 
   const state = signToken(
     { scope: 'oauth-state', target: 'admin', nonce: crypto.randomBytes(12).toString('base64url') },
-    10 * 60
+    10 * 60,
   );
   res.redirect(discordAuthorizeUrl(state).toString());
 });
@@ -624,12 +628,12 @@ app.get('/auth/callback', async (req, res) => {
           name: me.global_name || me.username,
           av: me.avatar ?? null,
         },
-        8 * 60 * 60
+        8 * 60 * 60,
       );
       const secure = PUBLIC_ORIGIN.startsWith('https://') ? '; Secure' : '';
       res.setHeader(
         'Set-Cookie',
-        `${ADMIN_COOKIE}=${adminSession}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${8 * 60 * 60}${secure}`
+        `${ADMIN_COOKIE}=${adminSession}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${8 * 60 * 60}${secure}`,
       );
       return res.redirect('/admin');
     }
@@ -638,7 +642,7 @@ app.get('/auth/callback', async (req, res) => {
       WEB_INSTANCE,
       me.id,
       me.global_name || me.username,
-      me.avatar ?? null
+      me.avatar ?? null,
     );
 
     // No fragmento, não na query: o fragmento não é enviado ao servidor nem
@@ -697,7 +701,7 @@ app.post('/api/admin/logout', (_req, res) => {
   const secure = PUBLIC_ORIGIN.startsWith('https://') ? '; Secure' : '';
   res.setHeader(
     'Set-Cookie',
-    `${ADMIN_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`
+    `${ADMIN_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`,
   );
   res.setHeader('Cache-Control', 'no-store');
   res.json({ ok: true });
@@ -761,12 +765,9 @@ app.use(
       // nome novo a cada build, então cachear para sempre é seguro.
       // O index.html aponta para eles e precisa ser sempre fresco.
       const hashed = filePath.includes(`${path.sep}assets${path.sep}`);
-      res.setHeader(
-        'Cache-Control',
-        hashed ? 'public, max-age=31536000, immutable' : 'no-store'
-      );
+      res.setHeader('Cache-Control', hashed ? 'public, max-age=31536000, immutable' : 'no-store');
     },
-  })
+  }),
 );
 
 app.get('*', (req, res, next) => {
@@ -869,7 +870,7 @@ function handleBroadcaster(ws, room, info, fonte) {
   }
 
   console.log(
-    `[room ${room.id}] broadcaster conectado: ${info.name} · ${fonte} (slot ${entry.slot})`
+    `[room ${room.id}] broadcaster conectado: ${info.name} · ${fonte} (slot ${entry.slot})`,
   );
 
   ws.on('message', (data, isBinary) => {
@@ -969,7 +970,7 @@ function handleViewer(ws, room, auth) {
       for (const entry of alvos) R.sendJson(entry.ws, { type: 'stop-request' });
       if (alvos.length) {
         console.log(
-          `[room ${room.id}] parada pedida por ${auth.name}: ${alvos.map((e) => e.fonte).join(', ')}`
+          `[room ${room.id}] parada pedida por ${auth.name}: ${alvos.map((e) => e.fonte).join(', ')}`,
         );
       }
     }
@@ -1004,6 +1005,11 @@ wss.on('connection', (ws) => {
     }
   });
 });
+
+// unref para o intervalo nao segurar o processo de pe sozinho: quem mantem o
+// programa vivo e a porta escutando, e quando ela fecha nao ha mais socket
+// para vigiar.
+heartbeat.unref?.();
 
 wss.on('close', () => clearInterval(heartbeat));
 
@@ -1046,7 +1052,7 @@ function avisarBuildVelho() {
     const fonte = Math.max(
       maisRecente(path.join(raiz, 'client', 'src')),
       maisRecente(path.join(raiz, 'client', 'index.html')),
-      maisRecente(path.join(raiz, 'shared'))
+      maisRecente(path.join(raiz, 'shared')),
     );
     if (fonte <= build) return;
 
@@ -1102,3 +1108,11 @@ server.listen(PORT, () => {
 
   console.log('');
 });
+
+/**
+ * Publicado para o teste, que importa o servidor no proprio processo em vez de
+ * gerar outro: so assim a cobertura enxerga as linhas que rodaram. Com PORT=0
+ * o sistema escolhe uma porta livre, e o endereco real sai de
+ * `server.address()` — nada aqui precisa saber que esta sob teste.
+ */
+export { app, server, wss };

@@ -168,7 +168,7 @@ let religar = null;
 function ligarControle() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   controle = new WebSocket(
-    `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&modo=controle`
+    `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&modo=controle`,
   );
 
   controle.addEventListener('message', (e) => {
@@ -237,7 +237,9 @@ function criarPainel(fonte) {
   function mostrarPrevia(stream) {
     previa = stream;
     el('previa').srcObject = stream;
-    el('previa').play().catch(() => {});
+    el('previa')
+      .play()
+      .catch(() => {});
     el('previa').hidden = false;
     el('vazio').hidden = true;
 
@@ -286,7 +288,7 @@ function criarPainel(fonte) {
         err.name === 'NotAllowedError'
           ? 'Acesso à câmera negado. Libere a permissão na barra de endereço e tente de novo.'
           : err.message,
-        'error'
+        'error',
       );
     }
   }
@@ -295,7 +297,7 @@ function criarPainel(fonte) {
   async function verTela() {
     try {
       const s = await navigator.mediaDevices.getDisplayMedia(
-        opcoesTela({ fps: opcoes.fps, comSom: opcoes.som })
+        opcoesTela({ fps: opcoes.fps, comSom: opcoes.som }),
       );
       pararPrevia();
       mostrarPrevia(s);
@@ -320,7 +322,7 @@ function criarPainel(fonte) {
    */
   async function listarCameras() {
     const cams = (await navigator.mediaDevices.enumerateDevices()).filter(
-      (d) => d.kind === 'videoinput'
+      (d) => d.kind === 'videoinput',
     );
 
     el('menu').replaceChildren(
@@ -337,7 +339,7 @@ function criarPainel(fonte) {
         });
         li.append(b);
         return li;
-      })
+      }),
     );
   }
 
@@ -394,7 +396,7 @@ function criarPainel(fonte) {
       deviceId: camera ? dispositivo : null,
       onStatus: (s) =>
         setStatus(
-          `Codec: ${s.codec} · ${s.width}×${s.height} · captura ${s.direct ? 'direta' : 'via <video>'}`
+          `Codec: ${s.codec} · ${s.width}×${s.height} · captura ${s.direct ? 'direta' : 'via <video>'}`,
         ),
       onStats: (s) => {
         el('viewers').textContent = s.viewers;
@@ -425,7 +427,9 @@ function criarPainel(fonte) {
     try {
       const stream = await broadcaster.start();
       el('preview').srcObject = stream;
-      el('preview').play().catch(() => {});
+      el('preview')
+        .play()
+        .catch(() => {});
       el('setup').hidden = true;
       el('live').hidden = false;
       chamar(null);
@@ -452,7 +456,7 @@ function criarPainel(fonte) {
 
   el('start').addEventListener('click', ligar);
   el('stop').addEventListener('click', () =>
-    broadcaster?.stop(camera ? 'Câmera desligada.' : 'Transmissão encerrada.')
+    broadcaster?.stop(camera ? 'Câmera desligada.' : 'Transmissão encerrada.'),
   );
 
   // stopPropagation para o clique não chegar ao document e fechar o que acabou

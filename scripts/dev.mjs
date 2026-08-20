@@ -43,7 +43,7 @@ acompanhar(
   spawn(process.execPath, [VITE, 'build', '--watch'], {
     cwd: path.join(RAIZ, 'client'),
     stdio: 'pipe',
-  })
+  }),
 );
 
 // -------------------------------------------------------------- entry point
@@ -74,7 +74,7 @@ function iniciarServidor(origem) {
   acompanhar(
     'servidor',
     cor.azul,
-    spawn(process.execPath, ['--watch', 'server/index.js'], { cwd: RAIZ, stdio: 'pipe', env })
+    spawn(process.execPath, ['--watch', 'server/index.js'], { cwd: RAIZ, stdio: 'pipe', env }),
   );
 }
 
@@ -82,7 +82,8 @@ function iniciarServidor(origem) {
 // para ver o que quem acabou de baixar o repositório vê sem desconfigurar a
 // própria instalação.
 const rapido = process.argv.includes('--rapido');
-if (rapido) console.log(`${cor.amarelo}  Modo de teste: túnel descartável, .env intacto.${cor.fim}\n`);
+if (rapido)
+  console.log(`${cor.amarelo}  Modo de teste: túnel descartável, .env intacto.${cor.fim}\n`);
 
 let tunel;
 try {
@@ -100,8 +101,12 @@ if (tunel) {
   // funciona em localhost.
   setTimeout(() => {
     if (servidorIniciado || encerrandoAgora()) return;
-    console.log(`\n${cor.amarelo}  O túnel demorou a responder — subindo o servidor mesmo assim.${cor.fim}`);
-    console.log(`${cor.fraco}  Em localhost tudo funciona; só o acesso de fora depende do túnel.${cor.fim}\n`);
+    console.log(
+      `\n${cor.amarelo}  O túnel demorou a responder — subindo o servidor mesmo assim.${cor.fim}`,
+    );
+    console.log(
+      `${cor.fraco}  Em localhost tudo funciona; só o acesso de fora depende do túnel.${cor.fim}\n`,
+    );
     iniciarServidor(null);
   }, 45_000).unref();
 }

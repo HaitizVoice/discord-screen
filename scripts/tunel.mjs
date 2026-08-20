@@ -68,7 +68,14 @@ export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar
   // ./cloudflared.mjs.
   const args = config
     ? ['--config', config, 'tunnel', '--no-autoupdate', 'run']
-    : ['--config', configNeutro(), 'tunnel', '--no-autoupdate', '--url', `http://localhost:${porta}`];
+    : [
+        '--config',
+        configNeutro(),
+        'tunnel',
+        '--no-autoupdate',
+        '--url',
+        `http://localhost:${porta}`,
+      ];
 
   const cloudflared = await garantirCloudflared();
 
@@ -89,7 +96,9 @@ export async function abrirTunel({ aoEndereco = () => {}, rapido = false, gravar
 
     if (origem && origem !== env.PUBLIC_ORIGIN) {
       gravarEnv({ PUBLIC_ORIGIN: origem });
-      console.log(`${cor.amarelo}  O .env apontava para outro endereço — corrigi para o do túnel.${cor.fim}`);
+      console.log(
+        `${cor.amarelo}  O .env apontava para outro endereço — corrigi para o do túnel.${cor.fim}`,
+      );
     }
 
     console.log(`${cor.verde}  ${origem || '(endereço definido no config do túnel)'}${cor.fim}\n`);
@@ -159,9 +168,11 @@ function configNeutro() {
   // que a linha de comando já diz.
   fs.writeFileSync(
     caminho,
-    ['# Vazio de propósito — ver configNeutro() em scripts/tunel.mjs.', 'no-autoupdate: true', ''].join(
-      '\n'
-    )
+    [
+      '# Vazio de propósito — ver configNeutro() em scripts/tunel.mjs.',
+      'no-autoupdate: true',
+      '',
+    ].join('\n'),
   );
   return caminho;
 }
@@ -172,13 +183,15 @@ function anunciar(url, escreveu, clientId) {
   console.log(
     escreveu
       ? `${cor.fraco}  Já guardei no .env — não precisa copiar.${cor.fim}\n`
-      : `${cor.fraco}  Modo de teste: não mexi no .env, vale só nesta execução.${cor.fim}\n`
+      : `${cor.fraco}  Modo de teste: não mexi no .env, vale só nesta execução.${cor.fim}\n`,
   );
 
   // Sem credencial do Discord o programa é só um site: falar de URL Mappings
   // ali seria instrução para um lugar onde a pessoa não tem o que fazer.
   if (!clientId) {
-    console.log(`${cor.fraco}  Abra esse endereço no navegador para usar de qualquer lugar.${cor.fim}\n`);
+    console.log(
+      `${cor.fraco}  Abra esse endereço no navegador para usar de qualquer lugar.${cor.fim}\n`,
+    );
     return;
   }
 
@@ -189,7 +202,7 @@ function anunciar(url, escreveu, clientId) {
   // navegação.
   console.log('  Abra a sua aplicação no portal do Discord:');
   console.log(
-    `\n      ${cor.verde}https://discord.com/developers/applications/${clientId}${cor.fim}\n`
+    `\n      ${cor.verde}https://discord.com/developers/applications/${clientId}${cor.fim}\n`,
   );
 
   console.log('  Lá, em Activities → URL Mappings, o "Target" é:');
@@ -204,7 +217,7 @@ function anunciar(url, escreveu, clientId) {
   // atividade continua fora do seletor sem nada explicando por quê.
   console.log('  E, se ainda não instalou a aplicação num servidor — uma vez só:');
   console.log(
-    `\n      ${cor.verde}https://discord.com/oauth2/authorize?client_id=${clientId}${cor.fim}\n`
+    `\n      ${cor.verde}https://discord.com/oauth2/authorize?client_id=${clientId}${cor.fim}\n`,
   );
 }
 
@@ -230,14 +243,18 @@ if (path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1
   tunel.stderr.on('data', (p) => process.stderr.write(p));
 
   tunel.on('error', (err) => {
-    console.log(`\n${cor.vermelho}  Não consegui executar o cloudflared: ${err.message}${cor.fim}\n`);
+    console.log(
+      `\n${cor.vermelho}  Não consegui executar o cloudflared: ${err.message}${cor.fim}\n`,
+    );
     process.exit(1);
   });
 
   tunel.on('close', (codigo) => {
     if (!tunel.fixo) {
       console.log(`\n${cor.vermelho}  O túnel fechou (código ${codigo}).${cor.fim}`);
-      console.log(`${cor.fraco}  Verifique sua conexão e rode "npm run tunel" de novo.${cor.fim}\n`);
+      console.log(
+        `${cor.fraco}  Verifique sua conexão e rode "npm run tunel" de novo.${cor.fim}\n`,
+      );
     }
     process.exit(codigo ?? 0);
   });

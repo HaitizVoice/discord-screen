@@ -60,8 +60,7 @@ function lerVolumes() {
   }
 }
 
-const gravarVolumes = () =>
-  store('volumePessoa', JSON.stringify(Object.fromEntries(volumePessoa)));
+const gravarVolumes = () => store('volumePessoa', JSON.stringify(Object.fromEntries(volumePessoa)));
 
 const volumeEfetivo = (userId) => volume * (volumePessoa.get(userId) ?? 1);
 
@@ -528,8 +527,14 @@ function buildWatchPrompt(slot, name, isMe) {
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v11H3z"/><path d="M8 20h8"/></svg>';
   btn.append(
     document.createTextNode(
-      camera ? (isMe ? 'Ver minha câmera' : 'Assistir câmera') : isMe ? 'Ver minha tela' : 'Assistir tela'
-    )
+      camera
+        ? isMe
+          ? 'Ver minha câmera'
+          : 'Assistir câmera'
+        : isMe
+          ? 'Ver minha tela'
+          : 'Assistir tela',
+    ),
   );
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -769,7 +774,7 @@ function renderBar() {
     'afterbegin',
     '<svg viewBox="0 0 24 24"><path d="M17 20v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>' +
       '<circle cx="9" cy="7" r="4"/><path d="M23 20v-2a4 4 0 0 0-3-3.87"/>' +
-      '<path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'
+      '<path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   );
   $('people').append(document.createTextNode(String(participants.length)));
   $('people').append(buildPeopleList());
@@ -1063,7 +1068,6 @@ function remove(key) {
   }
 }
 
-
 // -------------------------------------------------------------------- lobby
 
 /** Tokens da sala atual. null = estamos no lobby. */
@@ -1150,7 +1154,7 @@ async function showLobby() {
 async function loadRooms() {
   const list = $('roomList');
 
-  let rooms = [];
+  let rooms;
   try {
     rooms = (await post(`${P}/api/rooms/list`, { identity: session?.identity })).rooms ?? [];
   } catch (err) {
@@ -1188,7 +1192,7 @@ function roomCard(room) {
     top.insertAdjacentHTML(
       'afterbegin',
       '<svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/>' +
-        '<path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>'
+        '<path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
     );
   }
 
@@ -1424,7 +1428,6 @@ async function authDiscord(fonteDoId) {
   });
 }
 
-
 /**
  * Emite uma identidade nova, jogando fora a que o servidor recusou.
  *
@@ -1495,7 +1498,7 @@ function connect() {
   if (!roomTokens) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(
-    `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(roomTokens.viewerToken)}`
+    `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(roomTokens.viewerToken)}`,
   );
   ws.binaryType = 'arraybuffer';
 
@@ -1538,7 +1541,8 @@ function connect() {
       lastRoomState = msg.room ?? null;
 
       // A senha da sala só aparece para quem a criou.
-      $('roomPill').textContent = `${lastRoomState?.locked ? '🔒 ' : ''}${lastRoomState?.name ?? ''}`;
+      $('roomPill').textContent =
+        `${lastRoomState?.locked ? '🔒 ' : ''}${lastRoomState?.name ?? ''}`;
       $('roomSettings').hidden = lastRoomState?.ownerId !== session?.user?.id;
       $('roomSettings').classList.toggle('on', Boolean(lastRoomState?.locked));
 

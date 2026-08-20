@@ -11,9 +11,13 @@ import WebSocket from 'ws';
 const BASE = 'http://localhost:3001';
 const WSB = 'ws://localhost:3001';
 const api = async (p, b) =>
-  (await fetch(BASE + p, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b),
-  })).json();
+  (
+    await fetch(BASE + p, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(b),
+    })
+  ).json();
 
 let falhas = 0;
 const check = (nome, ok, extra = '') => {
@@ -30,7 +34,9 @@ const ctrl = new WebSocket(`${WSB}/ws?t=${encodeURIComponent(shareToken)}&modo=c
 const recebidos = [];
 let fechou = false;
 ctrl.on('message', (d) => recebidos.push(JSON.parse(d.toString())));
-ctrl.on('close', () => { fechou = true; });
+ctrl.on('close', () => {
+  fechou = true;
+});
 await new Promise((r) => ctrl.on('open', r));
 
 check('a aba de controle conecta', ctrl.readyState === WebSocket.OPEN);
@@ -40,18 +46,31 @@ check('a aba de controle conecta', ctrl.readyState === WebSocket.OPEN);
 console.log('esperando a varredura fechar a sala vazia (20s)…');
 await new Promise((r) => setTimeout(r, 20_000));
 
-check('a aba foi avisada de que a sala fechou', recebidos.some((m) => m.type === 'room-gone'),
-  `recebeu: ${JSON.stringify(recebidos.map((m) => m.type))}`);
-check('o socket da aba foi fechado', fechou,
-  fechou ? '' : `readyState=${ctrl.readyState} — ficaria surdo para sempre`);
+check(
+  'a aba foi avisada de que a sala fechou',
+  recebidos.some((m) => m.type === 'room-gone'),
+  `recebeu: ${JSON.stringify(recebidos.map((m) => m.type))}`,
+);
+check(
+  'o socket da aba foi fechado',
+  fechou,
+  fechou ? '' : `readyState=${ctrl.readyState} — ficaria surdo para sempre`,
+);
 
 // Uma conexão nova bate numa sala que não existe mais.
 const zumbi = new WebSocket(`${WSB}/ws?t=${encodeURIComponent(shareToken)}&modo=controle`);
 const doZumbi = [];
 zumbi.on('message', (d) => doZumbi.push(JSON.parse(d.toString())));
-await new Promise((r) => { zumbi.on('close', r); zumbi.on('error', r); setTimeout(r, 2000); });
-check('reconectar na sala morta responde room-gone', doZumbi.some((m) => m.type === 'room-gone'),
-  `recebeu: ${JSON.stringify(doZumbi.map((m) => m.type))}`);
+await new Promise((r) => {
+  zumbi.on('close', r);
+  zumbi.on('error', r);
+  setTimeout(r, 2000);
+});
+check(
+  'reconectar na sala morta responde room-gone',
+  doZumbi.some((m) => m.type === 'room-gone'),
+  `recebeu: ${JSON.stringify(doZumbi.map((m) => m.type))}`,
+);
 
 // ---------------------------------------------------------------------------
 
@@ -78,19 +97,28 @@ check('reconectar na sala morta responde room-gone', doZumbi.some((m) => m.type 
   const doTx = [];
   let txFechou = false;
   tx.on('message', (d) => {
-    try { doTx.push(JSON.parse(d.toString())); } catch { /* quadro binario */ }
+    try {
+      doTx.push(JSON.parse(d.toString()));
+    } catch {
+      /* quadro binario */
+    }
   });
-  tx.on('close', () => { txFechou = true; });
+  tx.on('close', () => {
+    txFechou = true;
+  });
   tx.send(JSON.stringify({ type: 'start' }));
   await new Promise((r) => setTimeout(r, 600));
 
-  check('transmissor recebeu slot', doTx.some((m) => m.type === 'slot'));
+  check(
+    'transmissor recebeu slot',
+    doTx.some((m) => m.type === 'slot'),
+  );
 
   // Com a pessoa na sala, nada pode cair.
   await new Promise((r) => setTimeout(r, 8000));
   check(
     'com a pessoa na sala, a transmissao continua',
-    !txFechou && !doTx.some((m) => m.type === 'stop-request')
+    !txFechou && !doTx.some((m) => m.type === 'stop-request'),
   );
 
   // Sai da atividade. So a aba de captura fica de pe.
@@ -102,9 +130,13 @@ check('reconectar na sala morta responde room-gone', doZumbi.some((m) => m.type 
   check(
     'quem saiu da sala tem a transmissao encerrada',
     Boolean(pedido),
-    'recebeu: ' + JSON.stringify(doTx.map((m) => m.type))
+    'recebeu: ' + JSON.stringify(doTx.map((m) => m.type)),
   );
-  check('o pedido explica o motivo', Boolean(pedido && pedido.motivo), (pedido && pedido.motivo) || '');
+  check(
+    'o pedido explica o motivo',
+    Boolean(pedido && pedido.motivo),
+    (pedido && pedido.motivo) || '',
+  );
 
   tx.close();
 }

@@ -18,7 +18,7 @@ import {
   supportError,
   fonteIndisponivel,
   opcoesTela,
-} from '/shared/broadcaster.js?v=7';
+} from '/shared/broadcaster.js?v=8';
 
 const $ = (id) => document.getElementById(id);
 

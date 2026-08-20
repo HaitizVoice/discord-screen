@@ -87,8 +87,23 @@ class StreamFalsa {
   }
 }
 
+/**
+ * Relogio de captura dos quadros de mentira, em microssegundos.
+ *
+ * Cada quadro nasce um intervalo de 30 fps depois do anterior, porque e assim
+ * que a captura de verdade entrega: instante de captura nao se repete. Quadros
+ * com o mesmo timestamp sao duplicatas, e o freio de ritmo do encodeFrame
+ * descarta duplicata — com um valor fixo aqui, metade dos testes passaria a
+ * medir o freio em vez do que eles querem medir.
+ */
+let relogioDeCaptura = 0;
+
 /** Um quadro, do tamanho que o teste quiser. */
-const quadro = (displayWidth = 1280, displayHeight = 720, timestamp = 1000) => ({
+const quadro = (
+  displayWidth = 1280,
+  displayHeight = 720,
+  timestamp = (relogioDeCaptura += 33_333),
+) => ({
   displayWidth,
   displayHeight,
   timestamp,
@@ -301,6 +316,7 @@ async function noAr(extra = {}, stream = telaSimples()) {
 }
 
 beforeEach(() => {
+  relogioDeCaptura = 0;
   encoders = [];
   audioEncoders = [];
   sockets = [];
@@ -706,6 +722,121 @@ describe('quadros', () => {
     await respirar();
 
     expect(encoder.codificados).toHaveLength(0);
+  });
+});
+
+describe('ritmo de entrada', () => {
+  /** Empurra quadros com os instantes de captura dados, em ms. */
+  async function entregar(contexto, instantes) {
+    const track = contexto.stream.getVideoTracks()[0];
+    for (const ms of instantes) {
+      processadorDe(track).empurrar(quadro(1280, 720, Math.round(ms * 1000)));
+      await respirar();
+    }
+  }
+
+  it('deixa passar tudo quando a origem entrega na taxa pedida', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    await entregar(contexto, [0, 33.3, 66.7, 100, 133.3]);
+
+    expect(contexto.encoder.codificados).toHaveLength(5);
+  });
+
+  it('derruba a metade quando a origem entrega o dobro do pedido', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    // 60 Hz num alvo de 30: sem freio, o encoder emitiria o dobro de quadros
+    // com o tamanho de um alvo de 30 — e a saída dobraria o bitrate pedido.
+    await entregar(contexto, [0, 16.7, 33.3, 50, 66.7, 83.3, 100]);
+
+    expect(contexto.encoder.codificados).toHaveLength(4);
+  });
+
+  it('absorve o tremor da captura a 60 fps em vez de derrubar quadro bom', async () => {
+    const contexto = await noAr({ fps: 60 });
+
+    // 60 Hz tremendo uns milissegundos, que é como captura de tela entrega de
+    // verdade. Com a tolerância proporcional antiga — 15% de 16,7 ms — o freio
+    // derrubava metade destes ao acaso, e a taxa virava cara ou coroa.
+    await entregar(contexto, [0, 13.9, 34.2, 49.1, 68.3, 82.6, 101.4]);
+
+    expect(contexto.encoder.codificados).toHaveLength(7);
+  });
+
+  it('não escorrega a taxa quando um quadro chega atrasado', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    // O terceiro chega 12 ms tarde e os seguintes voltam à grade. Medindo
+    // contra o último aceito, o atraso empurraria a régua e derrubaria o
+    // quarto; contra a grade, atraso de um é atraso de um só.
+    await entregar(contexto, [0, 33.3, 78.7, 100, 133.3, 166.7]);
+
+    expect(contexto.encoder.codificados).toHaveLength(6);
+  });
+
+  it('recomeça a grade quando o relógio da origem salta para trás', async () => {
+    const contexto = await noAr({ fps: 30 });
+
+    await entregar(contexto, [1000, 1033.3]);
+    // Tela nova, relógio novo: o salto denuncia que a régua antiga não vale.
+    await entregar(contexto, [0, 33.3]);
+
+    expect(contexto.encoder.codificados).toHaveLength(4);
+  });
+});
+
+describe('fila do encoder', () => {
+  async function empurrar(contexto, quantos) {
+    const track = contexto.stream.getVideoTracks()[0];
+    for (let i = 0; i < quantos; i++) {
+      processadorDe(track).empurrar(quadro());
+      await respirar();
+    }
+  }
+
+  it('segura o descarte até a fila esvaziar de verdade', async () => {
+    const contexto = await noAr();
+
+    // Afoga o encoder, e depois devolve a fila ao valor que, sem histerese,
+    // já voltaria a aceitar. Com ela, ainda não: 2 continua sendo apuros.
+    contexto.encoder.encodeQueueSize = 5;
+    await empurrar(contexto, 1);
+    contexto.encoder.encodeQueueSize = 2;
+    await empurrar(contexto, 1);
+
+    expect(contexto.encoder.codificados).toHaveLength(0);
+  });
+
+  it('volta a aceitar quando a fila desce a um', async () => {
+    const contexto = await noAr();
+
+    contexto.encoder.encodeQueueSize = 5;
+    await empurrar(contexto, 1);
+    contexto.encoder.encodeQueueSize = 1;
+    await empurrar(contexto, 1);
+
+    expect(contexto.encoder.codificados).toHaveLength(1);
+  });
+
+  it('o descarte por fila não consome a marca do ritmo', async () => {
+    const contexto = await noAr({ fps: 30 });
+    const track = contexto.stream.getVideoTracks()[0];
+
+    // Um quadro morre na fila e o seguinte vem 20 ms depois — perto demais para
+    // o alvo de 30 fps. Mas o primeiro nunca chegou a ocupar marca nenhuma, a
+    // grade ainda não começou, e é este que a começa. Antes o descarte por fila
+    // já tinha mexido na régua, e este quadro morria por causa de um quadro que
+    // o encoder nem chegou a ver.
+    contexto.encoder.encodeQueueSize = 5;
+    processadorDe(track).empurrar(quadro(1280, 720, 0));
+    await respirar();
+
+    contexto.encoder.encodeQueueSize = 0;
+    processadorDe(track).empurrar(quadro(1280, 720, 20_000));
+    await respirar();
+
+    expect(contexto.encoder.codificados).toHaveLength(1);
   });
 });
 

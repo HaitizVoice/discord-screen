@@ -29,14 +29,27 @@ const CANDIDATES = [
 ];
 
 /**
- * Folga aceita antes de considerar que um quadro veio cedo demais.
+ * Quão longe da marca da grade um quadro ainda serve para aquela marca.
  *
- * Sem folga nenhuma, um intervalo de 32,9 ms num alvo de 33,3 derrubaria um
- * quadro sim, outro não, e a taxa cairia à metade por causa de ruído de
- * relógio. 15% é maior que a irregularidade normal da captura e bem menor que
- * a distância entre uma taxa e a seguinte.
+ * Meio intervalo para cada lado, e meio não é chute: é a maior tolerância que
+ * ainda escolhe um quadro só por marca. Mais que isso e dois quadros disputam
+ * a mesma vaga; menos e o tremor normal da captura passa a derrubar quadro bom.
+ *
+ * Este número já foi 15% do intervalo, e foi um erro caro. A 30 fps sobravam
+ * 5 ms de folga e ninguém via nada; a 60 fps sobravam 2,5 — menos que o tremor
+ * da própria captura de tela. O freio passou a derrubar quadros ao acaso, e a
+ * taxa virou cara ou coroa entre 60 e 30. Era isso que fazia 60 fps tremer.
  */
-const FOLGA_RITMO = 0.85;
+const TOLERANCIA_GRADE = 0.5;
+
+/**
+ * Salto que denuncia relógio de origem novo, em intervalos.
+ *
+ * Trocar de tela, ou uma aba que dormiu e voltou, traz timestamps de outra
+ * régua. Quatro intervalos é mais que qualquer engasgo de rede e menos que
+ * qualquer troca de fonte de verdade.
+ */
+const GRADE_PERDIDA = 4;
 
 // Keyframe periódico: seguro barato para quem reconecta fora do fluxo normal.
 const KEYFRAME_EVERY_MS = 3000;
@@ -204,10 +217,12 @@ export function createBroadcaster({
   let lastKeyframeAt = 0;
   let srcW = 0;
   let srcH = 0;
-  // Timestamp do último quadro que passou para o encoder, em ms. Null deixa o
-  // próximo passar — é o que reinicia o ritmo depois de trocar de tela ou de
-  // taxa, quando a referência anterior não vale mais.
-  let ultimoAceito = null;
+  // Próxima marca da grade de ritmo, em ms do relógio da captura. Null recomeça
+  // a grade no quadro seguinte — é o que reinicia o ritmo depois de trocar de
+  // tela ou de taxa, quando a régua anterior não vale mais.
+  let proximaMarca = null;
+  // Encoder em apuros. Ver a histerese no encodeFrame.
+  let afogado = false;
   // Quantos quadros a captura entregou, contra quantos foram codificados. A
   // diferença entre os dois é o diagnóstico deste bloco.
   let framesEntrada = 0;
@@ -698,30 +713,56 @@ export function createBroadcaster({
     }
     framesEntrada++;
 
-    // O encoder foi configurado para uma taxa, e é por ela que ele reparte os
-    // bits: cada quadro recebe mais ou menos `bitrate / framerate`. Entregar
-    // quadros mais depressa do que o combinado não faz o encoder comprimir mais
-    // — faz ele emitir mais quadros do mesmo tamanho, e a saída passa do alvo
-    // pelo fator exato do excesso. Uma tela de 144 Hz codificada a 30 fps
-    // manda quase cinco vezes o que foi pedido.
+    // Backpressure com histerese: entra em apuros com a fila acima de 2 e só
+    // sai quando ela desce a 1.
     //
-    // A restrição `frameRate` da captura deveria segurar isso, mas ela é um
-    // pedido: `getDisplayMedia` a atende quando quer, e `applyConstraints`
-    // numa faixa de tela viva quase nunca. Aqui não é pedido.
-    const tsMs = (frame.timestamp ?? 0) / 1000;
-    if (ultimoAceito !== null && tsMs > ultimoAceito) {
-      if (tsMs - ultimoAceito < (1000 / fps) * FOLGA_RITMO) {
-        frame.close();
-        return true;
-      }
-    }
-    ultimoAceito = tsMs;
-
-    // Backpressure: fila no encoder vira latência que nunca mais sai.
-    if (encoder.encodeQueueSize > 2) {
+    // A histerese é o que separa uma taxa menor de uma taxa que balança. Com a
+    // carga exatamente em cima do limite — que é onde 60 fps quase sempre fica
+    // — um limiar seco faz o encoder aceitar, atrasar, descartar, alcançar e
+    // aceitar de novo, a cada quadro. Não se vê "menos quadros", vê-se tranco.
+    // Trinta firmes são melhores que quarenta e cinco tremendo.
+    //
+    // Vem antes do ritmo de propósito: quadro que o encoder não tem como
+    // receber não pode consumir uma marca da grade. Era esse detalhe que fazia
+    // o descarte por fila mexer na régua do ritmo e derrubar a taxa junto.
+    if (encoder.encodeQueueSize > (afogado ? 1 : 2)) {
+      afogado = true;
       frame.close();
       return true;
     }
+    afogado = false;
+
+    // Ritmo, medido contra uma grade ideal — e não contra o último aceito.
+    //
+    // O encoder foi configurado para uma taxa e é por ela que reparte os bits:
+    // cada quadro recebe mais ou menos `bitrate / framerate`. Entregar mais
+    // depressa que o combinado não faz ele comprimir mais, faz ele emitir mais
+    // quadros do mesmo tamanho, e a saída passa do alvo pelo fator exato do
+    // excesso. Uma tela de 144 Hz codificada a 30 fps manda quase cinco vezes o
+    // que foi pedido. A restrição `frameRate` da captura deveria segurar isso,
+    // mas ela é um pedido: `getDisplayMedia` a atende quando quer, e
+    // `applyConstraints` numa faixa de tela viva quase nunca.
+    //
+    // Medir contra o último aceito parece a mesma coisa e não é. Um quadro que
+    // chega atrasado leva a régua junto: o seguinte passa a ser cobrado a
+    // partir do atraso dele, o próximo a partir daquele, e a taxa escorrega
+    // para baixo sozinha, sem que nada tenha piorado. Contra a grade, atraso de
+    // um quadro é atraso de um quadro só.
+    const passo = 1000 / fps;
+    const tsMs = (frame.timestamp ?? 0) / 1000;
+
+    if (proximaMarca === null || tsMs < proximaMarca - passo * GRADE_PERDIDA) {
+      proximaMarca = tsMs;
+    }
+    if (tsMs < proximaMarca - passo * TOLERANCIA_GRADE) {
+      frame.close();
+      return true;
+    }
+
+    proximaMarca += passo;
+    // A origem entrega mais devagar que o alvo: a grade não tem por que correr
+    // atrás de marcas que já passaram e que nenhum quadro vai preencher.
+    if (proximaMarca < tsMs) proximaMarca = tsMs + passo;
 
     const timestamp = frame.timestamp ?? performance.now() * 1000;
     syncSize(frame);
@@ -1029,9 +1070,10 @@ export function createBroadcaster({
     srcW = 0;
     srcH = 0;
     wantKeyframe = true;
-    // A tela nova traz o próprio relógio de captura: comparar com o timestamp
-    // da anterior derrubaria quadros por uma diferença que não significa nada.
-    ultimoAceito = null;
+    // A tela nova traz o próprio relógio de captura: cobrar da grade antiga
+    // derrubaria quadros por uma diferença que não significa nada.
+    proximaMarca = null;
+    afogado = false;
 
     if (video) {
       video.srcObject = fresh;
@@ -1055,11 +1097,12 @@ export function createBroadcaster({
   /** Ajusta qualidade e taxa de quadros com a transmissão no ar. */
   function setQuality({ bitrate: nextBitrate, fps: nextFps } = {}) {
     if (nextBitrate) bitrate = nextBitrate;
-    // Taxa nova, ritmo novo: o freio do encodeFrame mede contra a taxa atual, e
+    // Taxa nova, grade nova: o freio do encodeFrame mede contra a taxa atual, e
     // subir de 15 para 60 fps precisa valer já no próximo quadro.
     if (nextFps && nextFps !== fps) {
       fps = nextFps;
-      ultimoAceito = null;
+      proximaMarca = null;
+      afogado = false;
     }
     if (encoder?.state !== 'configured') return;
 

@@ -263,11 +263,7 @@ body {
 
    Com a caixa definida, `contain` faz o resto: reduz ou amplia preservando a
    proporção, nunca corta, e deixa o fundo preto aparecer nas sobras. */
-/* O vídeo da conexão direta ocupa exatamente o mesmo lugar do canvas e segue a
-   mesma regra: os dois nunca estão no DOM ao mesmo tempo, e a troca entre um
-   transporte e o outro não pode mudar o enquadramento. */
-.tile canvas,
-.tile video {
+.tile canvas {
   position: absolute;
   inset: 0;
   width: 100%;

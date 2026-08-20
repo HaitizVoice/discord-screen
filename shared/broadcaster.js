@@ -570,18 +570,26 @@ export function createBroadcaster({
   }
 
   async function pickConfig(width, height) {
-    // Passadas em ordem de preferência, caindo para configurações mais simples:
-    // navegador que não conhece uma destas chaves recusa a configuração inteira
-    // por causa dela, e ficar sem transmitir é pior que transmitir pior.
+    // O codec por fora, as opções por dentro. A ordem é a decisão inteira desta
+    // função, e inverter os laços custou caro uma vez: com as opções por fora,
+    // um H.264 que recusasse `bitrateMode` perdia para um VP8 que o aceitasse —
+    // e VP8 em 1080p não tem encoder por hardware em máquina nenhuma comum.
+    // Trocar o chip de vídeo pela CPU para não abrir mão de uma opção de
+    // bitrate derruba a taxa de quadros pela metade. Degrada-se a opção antes
+    // de degradar o codec.
     //
-    // `bitrateMode: 'constant'` importa mais do que parece. O padrão é
-    // `variable`, e em VBR o controlador de taxa trata o `bitrate` como média
-    // de longo prazo — numa troca de cena ele estoura o alvo com folga, e a
-    // rajada é justamente o que entope o relay. Constante troca qualidade em
-    // cena difícil por um teto que se cumpre.
-    for (const realtime of [true, false]) {
-      for (const constante of [true, false]) {
-        for (const candidate of CANDIDATES) {
+    // Dentro de um codec, `latencyMode` vem antes de `bitrateMode` porque
+    // atraso é o que este programa existe para não ter; o teto de bitrate é o
+    // segundo prêmio.
+    //
+    // `bitrateMode: 'constant'` ainda importa. O padrão é `variable`, e em VBR
+    // o controlador de taxa trata o `bitrate` como média de longo prazo — numa
+    // troca de cena ele estoura o alvo com folga, e a rajada é justamente o que
+    // entope o relay. Constante troca qualidade em cena difícil por um teto que
+    // se cumpre.
+    for (const candidate of CANDIDATES) {
+      for (const realtime of [true, false]) {
+        for (const constante of [true, false]) {
           const cfg = { ...candidate, width, height, bitrate, framerate: fps };
           if (realtime) cfg.latencyMode = 'realtime';
           if (constante) cfg.bitrateMode = 'constant';

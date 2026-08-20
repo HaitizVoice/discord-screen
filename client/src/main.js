@@ -2110,7 +2110,7 @@ $('settings').addEventListener('click', () => {
  * consulta ao estado a cada movimento do mouse para poupar um setTimeout, e
  * quem decide se a classe pinta alguma coisa já é o CSS.
  */
-const OCIO = 2500;
+const OCIO = 1500;
 let ocioso = null;
 
 function acordarBarras() {

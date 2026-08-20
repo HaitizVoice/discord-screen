@@ -77,6 +77,16 @@ let volumeAntes = volume || 1;
 // de quem assiste precisa sobreviver a isso.
 let activeSlot = null;
 let telaCheia = false;
+// O que o link da atividade pediu: qual tela no palco e se já em tela cheia.
+// Não dá para aplicar no arranque — a sala ainda não tem transmissão nenhuma, e
+// o render zera a escolha justamente nesse estado. Fica guardado até a tela
+// aparecer.
+// Não tem prazo de propósito. Tinha, e era uma corrida perdida: se o estado da
+// sala demorasse — aba aberta em segundo plano, WebSocket lento, ninguém
+// transmitindo ainda — a intenção morria antes de poder ser cumprida, e a
+// pessoa caía no convite que o link existia para pular. Ela se apaga sozinha ao
+// ser usada, que é a única condição que importa.
+let chegada = null;
 
 // ------------------------------------------------------------------- helpers
 
@@ -192,7 +202,11 @@ function applyStrip() {
   // O teto acompanha a janela: uma largura guardada grande demais engoliria o
   // palco depois de alguém encolher o Discord.
   const max = Math.max(STRIP_MIN, $('grid').clientWidth * 0.45);
-  $('grid').style.setProperty('--strip', `${Math.round(Math.min(max, stripW))}px`);
+  const largura = `${Math.round(Math.min(max, stripW))}px`;
+  $('grid').style.setProperty('--strip', largura);
+  // Também no #app: a barra de controles é irmã da grade, não filha, e precisa
+  // da mesma medida para se centrar no palco em vez de na janela.
+  $('app').style.setProperty('--strip', largura);
 }
 
 function setStrip(px) {
@@ -240,7 +254,8 @@ function renderGrid() {
     grid.hidden = true;
     $('empty').hidden = true;
     $('fullscreen').hidden = true;
-    $('app').classList.remove('cheia');
+    $('watchSite').hidden = true;
+    $('app').classList.remove('cheia', 'flutua', 'palco');
     return;
   }
 
@@ -259,18 +274,62 @@ function renderGrid() {
     activeSlot = entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
   }
 
+  // Quem chegou pelo link da atividade já pediu para assistir lá atrás: parar
+  // num convite de "Assistir tela" seria cobrar o mesmo clique duas vezes.
+  //
+  // A tela pedida tem preferência, mas não é condição. Ela pode não vir no link
+  // (atividade com bundle antigo em cache) ou não ter chegado ainda neste
+  // render — e em nenhum dos dois casos vale desistir e mostrar o convite,
+  // porque a escolha automática logo acima já garante uma tela válida no palco.
+  //
+  // Só espera enquanto não houver tela nenhuma: aí não há o que assistir, e a
+  // intenção fica de pé até alguém transmitir ou o prazo dela vencer.
+  if (chegada && activeSlot === null) {
+    console.info('[sala] link pediu para assistir, mas ninguém está transmitindo ainda');
+  }
+
+  if (chegada && activeSlot !== null) {
+    const pedida = chegada.slot;
+    const alvo = pedida !== null && available.has(pedida) ? pedida : activeSlot;
+    console.info('[sala] assistindo automaticamente', { pedida, alvo, slots: [...available.keys()] });
+    // Zerado antes de qualquer coisa: watchSlot renderiza de novo, e a segunda
+    // passada não pode reabrir este mesmo caminho.
+    const cheia = chegada.cheia;
+    chegada = null;
+
+    activeSlot = alvo;
+    telaCheia = cheia;
+    // Adiado porque watchSlot chama renderGrid, e estamos dentro de um.
+    if (!watching.has(alvo)) queueMicrotask(() => watchSlot(alvo));
+  }
+
   const noPalco = activeSlot !== null;
   $('fullscreen').hidden = !noPalco;
   // A classe vai no #app, e não na grade: quem sai do layout são as barras, que
   // são irmãs dela. Fica acima do `return` de sala vazia — senão as barras
   // continuariam flutuando sobre o painel de "ninguém na sala".
   $('app').classList.toggle('cheia', noPalco && telaCheia);
+  // Dentro da sala as barras sempre flutuam, tendo transmissão ou não: a barra
+  // não deve pular de lugar quando alguém começa a transmitir, e um dock que
+  // muda de posição sozinho é a mesma barra parecendo duas.
+  $('app').classList.add('flutua');
+  // Sumir por ócio, porém, só faz sentido com imagem embaixo — é a imagem que
+  // se quer descobrir. Sobre uma grade de avatares o sumiço não revelaria nada
+  // e só faria os controles parecerem quebrados.
+  $('app').classList.toggle('palco', noPalco);
   $('fullscreen').classList.toggle('on', telaCheia);
   // A dica e o nome acessível andam juntos: o botão faz duas coisas conforme o
   // estado, e anunciar sempre a mesma coisa mentiria para quem usa leitor.
   const rotulo = telaCheia ? 'Sair da tela cheia' : 'Tela cheia';
   $('fullscreen').dataset.tip = rotulo;
   $('fullscreen').setAttribute('aria-label', rotulo);
+
+  // Só em tela cheia, e só dentro do Discord: é ali que a moldura da atividade
+  // aperta, e no site a pessoa já está onde o botão levaria. A dica sai daqui,
+  // e não do clique, porque o palco também entra em tela cheia pelo clique no
+  // tile — dois caminhos, um lugar só para avisar.
+  const podeIrAoSite = inDiscord && noPalco && Boolean(origemDoSite());
+  $('watchSite').hidden = !podeIrAoSite;
 
   if (!hasPeople) return;
 
@@ -564,10 +623,7 @@ function renderProfileButton() {
   if (!session) return;
   const me = participants.find((p) => p.id === session.user.id) ?? session.user;
 
-  $('profile').replaceChildren(buildAvatar({ ...me, id: session.user.id }));
-
-  // Mesma identidade, duas superfícies: bolinha no dock dentro da sala,
-  // bolinha com nome no cabeçalho do lobby.
+  // A identidade vive só no cabeçalho do lobby agora: bolinha com nome.
   const name = document.createElement('span');
   name.textContent = me.name;
   $('lobbyUser').replaceChildren(buildAvatar({ ...me, id: session.user.id }), name);
@@ -575,7 +631,6 @@ function renderProfileButton() {
 }
 
 $('lobbyUser').addEventListener('click', openProfile);
-$('profile').addEventListener('click', openProfile);
 
 function openProfile() {
   if (!session) return;
@@ -807,21 +862,6 @@ function renderBar() {
   cam.dataset.tip = rotuloCam;
   cam.setAttribute('aria-label', rotuloCam);
 
-  // A engrenagem fica sempre à mão: parada ela edita o que valerá na próxima
-  // transmissão, e é o único lugar onde essas opções existem agora. Segue os
-  // botões principais para não sobrar sozinha na barra do lobby, onde não há
-  // transmissão nenhuma para configurar.
-  $('liveSettings').hidden = $('share').hidden;
-  // Veio som e ele foi barrado: a engrenagem pisca, porque é atrás dela que
-  // está a saída. Sem isso o aviso passa no toast e ninguém acha o caminho.
-  const somPendente = Boolean(myBroadcast?.somBloqueado?.());
-  $('liveSettings').classList.toggle('atencao', somPendente);
-  $('liveSettings').dataset.tip = somPendente
-    ? 'Som barrado — clique para escolher a fonte'
-    : myBroadcast
-      ? 'Ajustes da transmissão'
-      : 'Configurações';
-
   // O controle de som só existe quando há som para controlar.
   const temSom = [...streams.values()].some((s) => s.audio);
   $('volumeBox').hidden = !temSom;
@@ -970,9 +1010,49 @@ async function boot() {
 
   // Lido antes de showLobby, que limpa o parâmetro da URL ao voltar ao lobby.
   const alvo = new URLSearchParams(location.search).get('sala');
+  // Do ?t= não: ele é lido do params do arranque, capturado antes de tudo.
+  const ingresso = params.get('t');
 
   await showLobby();
+  if (ingresso) return abrirPeloIngresso(ingresso);
   if (session && alvo) await joinById(alvo);
+}
+
+/**
+ * Entra direto na sala de um link recebido da atividade.
+ *
+ * Não passa pelo lobby nem pela senha: a sala da call não aparece na lista e
+ * recusaria o join de fora do canal de voz. O ingresso é a prova de que essa
+ * porta já se abriu, e o servidor reemite os tokens a partir dele.
+ */
+async function abrirPeloIngresso(ingresso) {
+  setEmpty('Entrando…', 'Sala da call');
+
+  // Guardado antes de conectar: o primeiro render pode chegar antes daqui de
+  // baixo terminar, e sem a intenção pronta ele escolheria outra tela.
+  // O ingresso, sozinho, já diz o que a pessoa veio fazer: assistir. O slot
+  // refina qual tela, e a tela cheia é o padrão de quem veio da atividade —
+  // links antigos, sem esses dois, continuam valendo.
+  const pedido = params.get('slot');
+  const numero = Number(pedido);
+  chegada = {
+    slot: pedido !== null && Number.isInteger(numero) ? numero : null,
+    cheia: params.get('cheia') !== '0',
+  };
+  console.info('[sala] chegou pelo link da atividade', chegada);
+
+  try {
+    const { name, ...tokens } = await post(`${P}/api/rooms/open`, { token: ingresso });
+    openRoom(tokens, { id: tokens.roomId, name });
+
+    // openRoom já trocou a URL para ?sala=<id>; o ingresso sai junto, para não
+    // ficar no histórico nem em link copiado da barra de endereço.
+    const url = new URL(location.href);
+    for (const chave of ['t', 'slot', 'cheia']) url.searchParams.delete(chave);
+    history.replaceState(null, '', url);
+  } catch (err) {
+    setEmpty('Não foi possível abrir', err.message);
+  }
 }
 
 /** Abre a sala desta call, criando-a na primeira pessoa que chega. */
@@ -1130,15 +1210,11 @@ async function showLobby() {
   $('roomSettings').hidden = true;
   $('share').hidden = true;
   $('camera').hidden = true;
-  $('liveSettings').hidden = true;
 
   // O dock inteiro sai de cena: todo controle dele é de dentro da sala, e o
   // cabeçalho do lobby já traz perfil e criar sala.
   $('fullscreen').hidden = true;
-  $('settings').hidden = true;
-  $('settings').classList.remove('on');
   $('panel').hidden = true;
-  $('profile').hidden = true;
 
   // O login só aparece para convidado: quem já entrou pelo Discord não tem o
   // que melhorar.
@@ -1306,8 +1382,6 @@ function openRoom(tokens, room) {
   $('share').hidden = false;
   $('camera').hidden = false;
   $('people').hidden = false;
-  $('settings').hidden = false;
-  $('profile').hidden = false;
   $('loginBtn').hidden = true;
 
   // Dentro do Discord não há lista para onde voltar nem outra sala com que
@@ -1793,6 +1867,64 @@ async function abrirLink(fonte) {
 }
 
 /**
+ * A origem pública do site, ou null quando o servidor não a conhece.
+ *
+ * Ela só chega ao cliente dentro do shareUrl. Sem PUBLIC_ORIGIN configurado o
+ * servidor emite um caminho relativo, e aí não existe endereço externo a
+ * oferecer: dentro do Discord, location.origin é o proxy da atividade, que não
+ * abre por fora. Devolver null é o que faz o botão sumir em vez de levar a
+ * pessoa a um link quebrado.
+ */
+function origemDoSite() {
+  try {
+    return new URL(roomTokens.shareUrl).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * O endereço desta sala no site, com o ingresso de quem já está aqui.
+ *
+ * Leva junto a tela em que a pessoa estava: abrir o site na sala certa mas na
+ * transmissão errada seria fazer ela procurar de novo o que já estava vendo.
+ *
+ * A tela cheia vai sempre, e não só quando já estava ligada aqui: sair da
+ * atividade é o pedido por mais espaço, e é o que este botão existe para
+ * atender.
+ */
+function urlDoSite(origem) {
+  const url = new URL(origem);
+  url.searchParams.set('t', roomTokens.viewerToken);
+  if (activeSlot !== null) {
+    url.searchParams.set('slot', String(activeSlot));
+    url.searchParams.set('cheia', '1');
+  }
+  return url.toString();
+}
+
+async function abrirNoSite() {
+  const origem = roomTokens && origemDoSite();
+  if (!origem) return;
+  const url = urlDoSite(origem);
+
+  if (!inDiscord) {
+    window.open(url, '_blank', 'noopener');
+    return;
+  }
+
+  try {
+    const res = await sdk.commands.openExternalLink({ url });
+    // Clientes antigos devolvem null; só false é recusa explícita.
+    if (res?.opened === false) toast('Você recusou abrir o link.', true);
+  } catch (err) {
+    toast(`Não foi possível abrir o link: ${err.message}`, true);
+  }
+}
+
+$('watchSite').addEventListener('click', abrirNoSite);
+
+/**
  * Encerra a minha transmissão, tenha ela nascido aqui ou na aba externa.
  *
  * Funil único de propósito: parar pelo botão, sair da sala e a sala fechar
@@ -1837,47 +1969,6 @@ $('camera').addEventListener('click', () => {
   ligarFonte('camera');
 });
 
-/**
- * O mesmo modal serve para configurar antes e para ajustar no ar.
- *
- * Em 'config' ele edita os padrões guardados e o botão salva; em 'live' vem com
- * os valores da transmissão em curso e o botão aplica na hora. Começar deixou
- * de passar por aqui: os botões da barra iniciam direto com o que está salvo.
- */
-let modalMode = 'config';
-
-function openModal(mode) {
-  modalMode = mode;
-  const live = mode === 'live';
-
-  $('modalTitle').textContent = live ? 'Ajustes da transmissão' : 'Configurações';
-  $('modalSub').textContent = live
-    ? 'Vale na hora, sem derrubar quem está assistindo.'
-    : 'Valem para a próxima vez que você começar a transmitir.';
-  $('modalGo').textContent = live ? 'Aplicar' : 'Salvar';
-  $('modalSwap').hidden = !live;
-  $('modalNote').hidden = live;
-
-  $('modalSom').hidden = !live || !myBroadcast;
-  if (live && myBroadcast) {
-    $('modalSom').textContent = myBroadcast.temSom()
-      ? 'Trocar a fonte do som'
-      : 'Som de uma aba ou janela';
-
-    const s = myBroadcast.getSettings();
-    $('mQuality').value = String(s.bitrate);
-    $('mFps').value = String(s.fps);
-  } else {
-    $('mQuality').value = String(ajustes.bitrate);
-    $('mFps').value = String(ajustes.fps);
-  }
-
-  $('modal').hidden = false;
-}
-
-// Com algo no ar a engrenagem ajusta aquela transmissão; parada, ela edita o
-// que valerá na próxima.
-$('liveSettings').addEventListener('click', () => openModal(myBroadcast ? 'live' : 'config'));
 
 /** Espelha o volume atual no botão e no cursor, sem tocar no áudio. */
 function renderVolume() {
@@ -1905,35 +1996,6 @@ function setVolume(valor) {
 // Clique no alto-falante silencia e devolve; o cursor ajusta no meio termo.
 $('mute').addEventListener('click', () => setVolume(volume === 0 ? volumeAntes : 0));
 $('volume').addEventListener('input', (e) => setVolume(Number(e.target.value) / 100));
-
-$('modalSwap').addEventListener('click', async () => {
-  if (!myBroadcast) return;
-  try {
-    await myBroadcast.changeScreen();
-    closeModal();
-  } catch (err) {
-    // Cancelar o seletor é rotina, não erro.
-    if (err.name !== 'NotAllowedError') toast(err.message, true);
-  }
-});
-
-// A saída para quem quer tela inteira COM som: o vídeo continua o mesmo e o som
-// passa a vir de uma aba ou de uma janela, que são as fontes isoladas do Discord.
-$('modalSom').addEventListener('click', async () => {
-  if (!myBroadcast) return;
-  try {
-    await myBroadcast.trocarSom();
-    toast('Som ligado, vindo da fonte escolhida.');
-    closeModal();
-    renderBar();
-  } catch (err) {
-    if (err.name !== 'NotAllowedError') toast(err.message, true);
-  }
-});
-
-const closeModal = () => {
-  $('modal').hidden = true;
-};
 
 /**
  * Transmite a partir daqui mesmo, sem abrir aba.
@@ -1972,51 +2034,14 @@ async function broadcastFromHere() {
   try {
     await b.start();
     myBroadcast = b;
-    closeModal();
     renderBar();
     return true;
   } catch (err) {
     const showedPicker = performance.now() - startedAt > 250;
-    if (err.name === 'NotAllowedError' && showedPicker) {
-      closeModal();
-      return true;
-    }
+    if (err.name === 'NotAllowedError' && showedPicker) return true;
     return false;
   }
 }
-
-$('modalCancel').addEventListener('click', closeModal);
-
-// Clique no fundo fecha; dentro do card, não.
-$('modal').addEventListener('click', (e) => {
-  if (e.target === $('modal')) closeModal();
-});
-
-$('modalGo').addEventListener('click', () => {
-  // Ajuste no ar: aplica e fecha, sem tocar na captura.
-  if (modalMode === 'live') {
-    const bitrate = Number($('mQuality').value);
-    const fps = Number($('mFps').value);
-    myBroadcast?.setQuality({ bitrate, fps });
-    // Ajustar no ar também é escolher: o que valeu agora vale na próxima.
-    ajustes = { ...ajustes, bitrate, fps };
-    store('ajustes', JSON.stringify(ajustes));
-    closeModal();
-    return;
-  }
-
-  ajustes = {
-    bitrate: Number($('mQuality').value),
-    fps: Number($('mFps').value),
-  };
-  store('ajustes', JSON.stringify(ajustes));
-
-  // A aba precisa saber na hora: ela mostra estas opções e usa a qualidade no
-  // que já está no ar. Sem isto o resumo dela envelhecia em silêncio.
-  ws?.send(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte() }));
-
-  closeModal();
-});
 
 // ------------------------------------------------------- modais das salas
 
@@ -2099,22 +2124,21 @@ $('roomSettings').addEventListener('click', openRoomSettings);
 
 // ----------------------------------------------------------------- painel
 
-$('settings').addEventListener('click', () => {
-  const panel = $('panel');
-  panel.hidden = !panel.hidden;
-  $('settings').classList.toggle('on', !panel.hidden);
-});
+
 
 /**
- * As barras somem depois de um tempo com o cursor parado, e voltam ao primeiro
- * movimento. Só têm efeito em tela cheia, onde elas flutuam sobre o vídeo — no
- * modo normal ocupam faixa própria e não há nada a desobstruir.
+ * As barras somem com o cursor parado e voltam ao primeiro movimento. Valem
+ * dentro da sala inteira, transmitindo ou não — flutuando, elas cobrem o que
+ * está embaixo nos dois casos.
  *
- * O relógio corre sempre, mesmo fora da tela cheia: um `if` aqui pagaria uma
- * consulta ao estado a cada movimento do mouse para poupar um setTimeout, e
- * quem decide se a classe pinta alguma coisa já é o CSS.
+ * O relógio corre sempre: um `if` aqui pagaria uma consulta ao estado a cada
+ * movimento do mouse para poupar um setTimeout, e quem decide se a classe pinta
+ * alguma coisa já é o CSS.
+ *
+ * Cursor que sai da janela recolhe na hora, sem esperar o relógio: não há mais
+ * movimento nenhum para vir, então o tempo de espera só adiaria o inevitável.
  */
-const OCIO = 1500;
+const OCIO = 3000;
 let ocioso = null;
 
 function acordarBarras() {
@@ -2123,10 +2147,18 @@ function acordarBarras() {
   ocioso = setTimeout(() => $('app').classList.add('ocioso'), OCIO);
 }
 
+function recolherBarras() {
+  clearTimeout(ocioso);
+  $('app').classList.add('ocioso');
+}
+
 // pointerdown junto com o movimento: em tela sensível ao toque não há mousemove
 // nenhum, e sem isto as barras sumiriam para sempre no primeiro silêncio.
 window.addEventListener('mousemove', acordarBarras);
 window.addEventListener('pointerdown', acordarBarras);
+// No document, e não na window: o mouseleave da window não dispara ao sair pela
+// borda em todos os navegadores.
+document.addEventListener('mouseleave', recolherBarras);
 acordarBarras();
 
 // O estado visual do botão é decidido por renderGrid, que é quem sabe se há
@@ -2141,7 +2173,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
 
   // Fecha o modal aberto mais recente antes de mexer no modo ampliado.
-  for (const id of ['profileModal', 'roomModal', 'joinModal', 'createModal', 'modal']) {
+  for (const id of ['profileModal', 'roomModal', 'joinModal', 'createModal']) {
     if (!$(id).hidden) {
       $(id).hidden = true;
       return;

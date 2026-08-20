@@ -458,6 +458,66 @@ describe('/api/rooms/call', () => {
   });
 });
 
+describe('/api/rooms/open', () => {
+  /** O que a atividade entrega ao botão "Assistir no site". */
+  const salaDaCall = async (call) => {
+    const me = await identidade({ instance_id: `abrir-${call}`, call, name: 'Quem assiste' });
+    return (await post('/api/rooms/call', { identity: me.identity })).json();
+  };
+
+  it('o ingresso abre a sala da call para quem está fora da call', async () => {
+    const sala = await salaDaCall('canal-10');
+
+    // Sem identidade nenhuma: é exatamente a situação do site, que não tem
+    // como provar presença no canal de voz.
+    const resposta = await post('/api/rooms/open', { token: sala.viewerToken });
+
+    expect(resposta.status).toBe(200);
+    expect((await resposta.json()).roomId).toBe(sala.roomId);
+  });
+
+  it('devolve o nome da sala, que o site não teria de onde tirar', async () => {
+    const sala = await salaDaCall('canal-11');
+    const corpo = await (await post('/api/rooms/open', { token: sala.viewerToken })).json();
+
+    expect(corpo.name).toBe('Sala da call');
+  });
+
+  it('devolve um shareUrl utilizável, e não só o token de assistir', async () => {
+    const sala = await salaDaCall('canal-12');
+    const corpo = await (await post('/api/rooms/open', { token: sala.viewerToken })).json();
+
+    expect(corpo.shareUrl).toContain('/share.html?t=');
+    expect(corpo.viewerToken).toBeTruthy();
+  });
+
+  it('o token de transmissor não serve de ingresso', async () => {
+    const sala = await salaDaCall('canal-13');
+    // Base fixa porque sem PUBLIC_ORIGIN o shareUrl sai relativo, que é o
+    // caso desta suíte — ela roda sem herdar o .env da máquina.
+    const doTransmissor = new URL(sala.shareUrl, 'http://x').searchParams.get('t');
+
+    const resposta = await post('/api/rooms/open', { token: doTransmissor });
+
+    expect(resposta.status).toBe(401);
+  });
+
+  it('token forjado é recusado', async () => {
+    expect((await post('/api/rooms/open', { token: 'nada.nada' })).status).toBe(401);
+    expect((await post('/api/rooms/open', {})).status).toBe(401);
+  });
+
+  it('sala que já fechou devolve 404, não uma sala vazia', async () => {
+    // Assinado de verdade, mas para uma sala que nunca existiu: é o mesmo
+    // estado de um link guardado depois de a sala fechar por inatividade.
+    const { signToken } = await import('./tokens.js');
+    const orfao = signToken({ room: 'sala-que-fechou', uid: 'u1', name: 'Alguém', role: 'viewer' });
+
+    const resposta = await post('/api/rooms/open', { token: orfao });
+    expect(resposta.status).toBe(404);
+  });
+});
+
 describe('/api/rooms/password', () => {
   it('só o dono troca a senha', async () => {
     const dono = await identidade({ instance_id: 'senha-1', name: 'Dono' });

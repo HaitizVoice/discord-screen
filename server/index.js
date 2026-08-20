@@ -537,6 +537,31 @@ app.post('/api/rooms/join', (req, res) => {
   res.json(issueRoomTokens(room.id, me));
 });
 
+/**
+ * Abre no site uma sala em que já se entrou pela atividade.
+ *
+ * O join normal não serve: a sala da call é recusada a quem não está no canal
+ * de voz, e uma sessão do site nunca está — é justamente isso que faz dela uma
+ * sala do Discord. Mas quem já entrou saiu de lá com um viewerToken assinado, e
+ * ele prova que a porta já se abriu uma vez para aquela pessoa.
+ *
+ * O token vale como ingresso, não como identidade emprestada: os tokens
+ * devolvidos sao reemitidos a partir do que está assinado dentro dele, entao
+ * ninguém troca de nome no caminho. E vale enquanto a sala existir — ela morre
+ * ao esvaziar, e o ingresso morre junto.
+ */
+app.post('/api/rooms/open', (req, res) => {
+  const ingresso = verifyToken(req.body?.token);
+  if (!ingresso?.room || ingresso.role !== 'viewer') {
+    return res.status(401).json({ error: 'Link inválido ou expirado.' });
+  }
+
+  const room = R.getRoom(ingresso.room);
+  if (!room) return res.status(404).json({ error: 'Sala não existe mais.' });
+
+  res.json({ ...issueRoomTokens(room.id, ingresso), name: room.name });
+});
+
 app.post('/api/rooms/password', (req, res) => {
   const me = identityOf(req, res);
   if (!me) return;

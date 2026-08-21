@@ -1,4 +1,4 @@
-![Como não compartilhar tela no Discord](como-nao-compartilhar-tela-no-discord-banner.png)
+![Como não compartilhar tela no DiscordHaitiz e tals](como-nao-compartilhar-tela-no-discord-banner.png)
 
 # Sala de Tela
 
